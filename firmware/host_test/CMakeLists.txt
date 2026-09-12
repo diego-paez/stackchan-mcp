@@ -53,3 +53,25 @@ target_link_libraries(listening_profile_test
 include(GoogleTest)
 gtest_discover_tests(mdns_candidate_extract_test)
 gtest_discover_tests(listening_profile_test)
+
+# --- attention / servo-safety -------------------------------------------
+# The controllers are deliberately free of ESP-IDF so the safety layer can be
+# tested where a mistake costs nothing. See
+# main/boards/stackchan/attention/README.md.
+add_executable(attention_safety_test
+    test_attention_safety.cc
+    ../main/boards/stackchan/attention/servo_safety_controller.cc
+    ../main/boards/stackchan/attention/attention_controller.cc
+    ../main/boards/stackchan/attention/motion_controller.cc
+    ../main/boards/stackchan/attention/behavior_manager.cc
+    ../main/boards/stackchan/attention/motion_mixer.cc
+    ../main/boards/stackchan/attention/head_controller.cc
+)
+
+target_include_directories(attention_safety_test
+    PRIVATE ../main/boards/stackchan
+)
+
+target_link_libraries(attention_safety_test PRIVATE GTest::gtest_main)
+
+add_test(NAME attention_safety_test COMMAND attention_safety_test)

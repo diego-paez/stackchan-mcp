@@ -1,0 +1,426 @@
+// Host tests for the attention/servo-safety chain.
+//
+// These exist to prove one claim: that no command reaching the servo sink has
+// bypassed the safety controller, and that the deliberately hostile inputs in
+// the prototype specification are refused rather than quietly turned into
+// something plausible.
+//
+// Nothing here touches ESP-IDF, a camera or a servo.
+#include <gtest/gtest.h>
+
+#include <cmath>
+#include <limits>
+
+#include "attention/attention_controller.h"
+#include "attention/behavior_manager.h"
+#include "attention/head_controller.h"
+#include "attention/motion_controller.h"
+#include "attention/motion_mixer.h"
+#include "attention/servo_safety_controller.h"
+#include "attention/servo_sink.h"
+#include "attention/vision_tracker.h"
+
+using namespace stackchan::attention;
+
+namespace {
+
+ServoLimits Limits() { return ServoLimits{}; }
+NeutralPose Neutral() { return NeutralPose{}; }
+HardwareBounds Bounds() { return HardwareBounds{}; }
+
+ServoCommand At(float yaw, float pitch, float speed = 60.0f) {
+    ServoCommand c;
+    c.valid = true;
+    c.yaw_deg = yaw;
+    c.pitch_deg = pitch;
+    c.speed_dps = speed;
+    return c;
+}
+
+}  // namespace
+
+// --------------------------------------------------------------------------
+// The hostile inputs named in the specification.
+// --------------------------------------------------------------------------
+TEST(ServoSafety, RejectsAbsurdYaw) {
+    ServoSafetyController s(Limits(), Neutral(), Bounds());
+    const ServoCommand cur = At(0.0f, 45.0f);
+
+    for (float yaw : {1000.0f, -1000.0f}) {
+        const SafetyResult r = s.filter(At(yaw, 45.0f), cur, 0.025f);
+        EXPECT_EQ(r.verdict, SafetyVerdict::kRejectedAbsurd) << "yaw " << yaw;
+        // Held at the current pose, not clamped to the edge of travel.
+        EXPECT_FLOAT_EQ(r.command.yaw_deg, cur.yaw_deg);
+        EXPECT_FLOAT_EQ(r.command.pitch_deg, cur.pitch_deg);
+    }
+    EXPECT_EQ(s.rejectedCount(), 2u);
+}
+
+TEST(ServoSafety, RejectsNaNAndInfinity) {
+    ServoSafetyController s(Limits(), Neutral(), Bounds());
+    const ServoCommand cur = At(5.0f, 40.0f);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    for (float bad : {nan, inf, -inf}) {
+        const SafetyResult r = s.filter(At(0.0f, bad), cur, 0.025f);
+        EXPECT_EQ(r.verdict, SafetyVerdict::kRejectedNotFinite);
+        EXPECT_FLOAT_EQ(r.command.pitch_deg, cur.pitch_deg);
+        EXPECT_TRUE(std::isfinite(r.command.pitch_deg));
+        EXPECT_TRUE(std::isfinite(r.command.yaw_deg));
+    }
+    // A NaN dt must not authorise anything either.
+    const SafetyResult r = s.filter(At(10.0f, 45.0f), cur, nan);
+    EXPECT_EQ(r.verdict, SafetyVerdict::kRejectedNotFinite);
+}
+
+TEST(ServoSafety, LimitsLargeInstantaneousJump) {
+    ServoLimits lim = Limits();
+    ServoSafetyController s(lim, Neutral(), Bounds());
+    const ServoCommand cur = At(0.0f, 45.0f);
+
+    // Inside the envelope, but the whole way across it in one update.
+    const SafetyResult r = s.filter(At(lim.max_yaw_deg, 45.0f), cur, 0.025f);
+
+    EXPECT_TRUE(r.modified);
+    EXPECT_LE(std::fabs(r.command.yaw_deg - cur.yaw_deg), lim.max_step_deg + 1e-4f);
+    EXPECT_LE(std::fabs(r.command.yaw_deg - cur.yaw_deg),
+              lim.max_velocity_deg_per_sec * 0.025f + 1e-4f);
+}
+
+TEST(ServoSafety, ClampsOutsideTravelEnvelope) {
+    ServoLimits lim = Limits();
+    ServoSafetyController s(lim, Neutral(), Bounds());
+    // Start at the edge so the rate limiter is not what stops it.
+    const ServoCommand cur = At(lim.max_yaw_deg, lim.max_pitch_deg);
+
+    const SafetyResult r = s.filter(At(lim.max_yaw_deg + 25.0f,
+                                       lim.max_pitch_deg + 25.0f), cur, 0.025f);
+    EXPECT_LE(r.command.yaw_deg, lim.max_yaw_deg);
+    EXPECT_LE(r.command.pitch_deg, lim.max_pitch_deg);
+    EXPECT_GT(s.clampedCount(), 0u);
+}
+
+TEST(ServoSafety, NeverLeavesTheHardwarePitchRangeEvenIfMisconfigured) {
+    // Someone widens the config past what the hardware tolerates. The
+    // hardware bounds are the floor under that mistake.
+    ServoLimits lim = Limits();
+    lim.min_pitch_deg = -50.0f;
+    lim.max_pitch_deg = 200.0f;
+    lim.max_step_deg = 500.0f;
+    lim.max_velocity_deg_per_sec = 10000.0f;
+
+    ServoSafetyController s(lim, Neutral(), Bounds());
+    const SafetyResult hi = s.filter(At(0.0f, 150.0f), At(0.0f, 45.0f), 0.025f);
+    const SafetyResult lo = s.filter(At(0.0f, -40.0f), At(0.0f, 45.0f), 0.025f);
+
+    EXPECT_LE(hi.command.pitch_deg, Bounds().hard_max_pitch_deg);
+    EXPECT_GE(lo.command.pitch_deg, Bounds().hard_min_pitch_deg);
+}
+
+TEST(ServoSafety, AbsurdDtCannotLicenseAHugeStep) {
+    ServoLimits lim = Limits();
+    ServoSafetyController s(lim, Neutral(), Bounds());
+    // A stalled scheduler reports 30 seconds since the last tick.
+    const SafetyResult r = s.filter(At(lim.max_yaw_deg, 45.0f), At(0.0f, 45.0f), 30.0f);
+    EXPECT_LE(std::fabs(r.command.yaw_deg), lim.max_step_deg + 1e-4f);
+}
+
+TEST(ServoSafety, EmergencyStopHoldsAndRefuses) {
+    ServoSafetyController s(Limits(), Neutral(), Bounds());
+    const ServoCommand cur = At(12.0f, 50.0f);
+
+    s.emergencyStop();
+    const SafetyResult r = s.filter(At(-20.0f, 30.0f), cur, 0.025f);
+
+    EXPECT_EQ(r.verdict, SafetyVerdict::kHeldEmergencyStop);
+    EXPECT_FLOAT_EQ(r.command.yaw_deg, cur.yaw_deg);
+    EXPECT_FLOAT_EQ(r.command.pitch_deg, cur.pitch_deg);
+    EXPECT_TRUE(s.emergencyStopped());
+
+    s.clearEmergencyStop();
+    EXPECT_NE(s.filter(At(12.5f, 50.0f), cur, 0.025f).verdict,
+              SafetyVerdict::kHeldEmergencyStop);
+}
+
+TEST(ServoSafety, WatchdogHoldsWhenCommandsStop) {
+    ServoSafetyController s(Limits(), Neutral(), Bounds());
+    s.setWatchdogTimeout(500);
+    s.noteValidCommand(1000);
+
+    EXPECT_FALSE(s.watchdogExpired(1400));
+    EXPECT_TRUE(s.watchdogExpired(1600));
+
+    // An invalid command holds position rather than driving anywhere.
+    ServoCommand none;
+    none.valid = false;
+    const ServoCommand cur = At(7.0f, 47.0f);
+    const SafetyResult r = s.filter(none, cur, 0.025f);
+    EXPECT_EQ(r.verdict, SafetyVerdict::kHeldWatchdog);
+    EXPECT_FLOAT_EQ(r.command.yaw_deg, 7.0f);
+}
+
+TEST(ServoSafety, IsSafeAgreesWithFilter) {
+    ServoSafetyController s(Limits(), Neutral(), Bounds());
+    EXPECT_TRUE(s.isSafe(At(10.0f, 50.0f)));
+    EXPECT_FALSE(s.isSafe(At(1000.0f, 50.0f)));
+    EXPECT_FALSE(s.isSafe(At(0.0f, std::numeric_limits<float>::quiet_NaN())));
+    ServoCommand invalid;
+    EXPECT_FALSE(s.isSafe(invalid));
+}
+
+// --------------------------------------------------------------------------
+// Tracking behaviour
+// --------------------------------------------------------------------------
+TEST(Attention, DeadZoneProducesNoMotion) {
+    AttentionConfig cfg;
+    AttentionController a(cfg, Neutral());
+
+    FaceTarget t;
+    t.visible = true;
+    t.confidence = 0.9f;
+    t.x = cfg.deadzone_x * 0.5f;   // inside the dead zone
+    t.y = 0.0f;
+
+    const HeadPose before = a.getTarget();
+    for (uint32_t ms = 0; ms < 1000; ms += 40) a.update(t, ms, 0.04f);
+    const HeadPose after = a.getTarget();
+
+    EXPECT_NEAR(before.yaw_deg, after.yaw_deg, 1e-3f);
+    EXPECT_EQ(a.state(), TrackingState::kTracking);
+}
+
+TEST(Attention, FaceOffCentreMovesTheTargetTowardIt) {
+    AttentionConfig cfg;
+    cfg.invert_yaw = false;
+    AttentionController a(cfg, Neutral());
+
+    FaceTarget t;
+    t.visible = true;
+    t.confidence = 0.9f;
+    t.x = 0.6f;                      // well outside the dead zone
+    t.y = 0.0f;
+
+    for (uint32_t ms = 0; ms < 500; ms += 40) a.update(t, ms, 0.04f);
+    EXPECT_GT(a.getTarget().yaw_deg, 0.5f);
+}
+
+TEST(Attention, LowConfidenceIsIgnored) {
+    AttentionConfig cfg;
+    cfg.min_confidence = 0.5f;
+    AttentionController a(cfg, Neutral());
+
+    FaceTarget t;
+    t.visible = true;
+    t.confidence = 0.2f;             // below the bar
+    t.x = 0.9f;
+
+    for (uint32_t ms = 0; ms < 400; ms += 40) a.update(t, ms, 0.04f);
+    EXPECT_EQ(a.state(), TrackingState::kNoTarget);
+    EXPECT_NEAR(a.getTarget().yaw_deg, Neutral().yaw_deg, 1e-3f);
+}
+
+TEST(Attention, BrieflyLostFaceHoldsThenRelaxes) {
+    AttentionConfig cfg;
+    AttentionController a(cfg, Neutral());
+
+    FaceTarget seen;
+    seen.visible = true;
+    seen.confidence = 0.9f;
+    seen.x = 0.5f;
+    uint32_t ms = 0;
+    for (; ms < 600; ms += 40) a.update(seen, ms, 0.04f);
+    const float held_at = a.getTarget().yaw_deg;
+    EXPECT_GT(held_at, 0.5f);
+
+    FaceTarget gone;
+    gone.visible = false;
+
+    a.update(gone, ms + 100, 0.04f);                 // 100 ms lost
+    EXPECT_EQ(a.state(), TrackingState::kHolding);
+    EXPECT_NEAR(a.getTarget().yaw_deg, held_at, 1e-3f);
+
+    a.update(gone, ms + 900, 0.04f);                 // 900 ms lost
+    EXPECT_EQ(a.state(), TrackingState::kRelaxing);
+    EXPECT_LT(a.getTarget().yaw_deg, held_at);       // drifting back
+}
+
+TEST(Attention, NoiseDoesNotProduceContinuousOscillation) {
+    // A face sitting at the centre with detector jitter must not keep the
+    // head moving: this is the oscillation the specification calls out.
+    AttentionConfig cfg;
+    AttentionController a(cfg, Neutral());
+
+    FaceTarget t;
+    t.visible = true;
+    t.confidence = 0.9f;
+
+    float jitter = cfg.deadzone_x * 0.6f;
+    for (uint32_t ms = 0; ms < 3000; ms += 40) {
+        t.x = (ms / 40) % 2 ? jitter : -jitter;   // flip-flop inside the zone
+        t.y = 0.0f;
+        a.update(t, ms, 0.04f);
+    }
+    EXPECT_NEAR(a.getTarget().yaw_deg, Neutral().yaw_deg, 0.5f);
+}
+
+// --------------------------------------------------------------------------
+// Behaviour
+// --------------------------------------------------------------------------
+TEST(Behaviors, ThinkIsTemporaryAndReturnsToAttend) {
+    BehaviorManager b(Neutral());
+    b.setBehavior(Behavior::ATTEND_FACE, 0);
+    EXPECT_TRUE(b.settings().tracking_enabled);
+
+    b.setThinkHoldMs(1000);
+    b.setBehavior(Behavior::THINK, 100);
+    EXPECT_FALSE(b.settings().tracking_enabled);
+    EXPECT_TRUE(b.settings().has_fixed_pose);
+
+    b.update(500);
+    EXPECT_EQ(b.current(), Behavior::THINK);
+    b.update(1300);
+    EXPECT_EQ(b.current(), Behavior::ATTEND_FACE);
+    EXPECT_TRUE(b.settings().tracking_enabled);
+}
+
+TEST(Behaviors, SleepAndLookCenterDisableTracking) {
+    BehaviorManager b(Neutral());
+    for (Behavior x : {Behavior::SLEEP, Behavior::LOOK_CENTER, Behavior::IDLE}) {
+        b.setBehavior(x, 0);
+        EXPECT_FALSE(b.settings().tracking_enabled) << ToString(x);
+    }
+}
+
+TEST(Mixer, FixedBehaviorPoseBeatsTracking) {
+    MotionMixer m(Neutral());
+    BehaviorSettings s;
+    s.tracking_enabled = true;
+    s.has_fixed_pose = true;
+    s.fixed_pose.yaw_deg = 8.0f;
+    s.fixed_pose.pitch_deg = 51.0f;
+
+    HeadPose attention;
+    attention.yaw_deg = -25.0f;
+
+    const MixResult r = m.mix(s, attention, true);
+    EXPECT_EQ(r.source, MixSource::kBehaviorPose);
+    EXPECT_FLOAT_EQ(r.pose.yaw_deg, 8.0f);
+}
+
+// --------------------------------------------------------------------------
+// The whole chain
+// --------------------------------------------------------------------------
+TEST(HeadController, NothingReachesTheServoOutsideTheEnvelope) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    ScheduleConfig sched;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, sched);
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    const ServoLimits lim = Limits();
+    uint32_t ms = 0;
+    // Drive a face hard to one corner for 20 seconds of simulated time.
+    for (; ms < 20000; ms += 10) {
+        vision.see(0.95f, -0.95f, ms);
+        hc.update(ms);
+        if (sink.last.valid) {
+            EXPECT_GE(sink.last.yaw_deg, lim.min_yaw_deg - 1e-3f);
+            EXPECT_LE(sink.last.yaw_deg, lim.max_yaw_deg + 1e-3f);
+            EXPECT_GE(sink.last.pitch_deg, lim.min_pitch_deg - 1e-3f);
+            EXPECT_LE(sink.last.pitch_deg, lim.max_pitch_deg + 1e-3f);
+            EXPECT_LE(sink.last.speed_dps, lim.max_speed_dps + 1e-3f);
+        }
+    }
+    EXPECT_GT(sink.writes, 100);
+    EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
+}
+
+TEST(HeadController, ConsecutiveCommandsNeverJump) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    const ServoLimits lim = Limits();
+    float prev_yaw = Neutral().yaw_deg, prev_pitch = Neutral().pitch_deg;
+    bool first = true;
+
+    for (uint32_t ms = 0; ms < 25000; ms += 10) {
+        // Teleport the face between opposite corners every half second — the
+        // worst case a detector can hand us.
+        const bool left = ((ms / 500) % 2) == 0;
+        vision.see(left ? -0.95f : 0.95f, left ? 0.9f : -0.9f, ms);
+        hc.update(ms);
+        if (!sink.last.valid) continue;
+        if (!first) {
+            EXPECT_LE(std::fabs(sink.last.yaw_deg - prev_yaw), lim.max_step_deg + 1e-3f);
+            EXPECT_LE(std::fabs(sink.last.pitch_deg - prev_pitch), lim.max_step_deg + 1e-3f);
+        }
+        prev_yaw = sink.last.yaw_deg;
+        prev_pitch = sink.last.pitch_deg;
+        first = false;
+    }
+}
+
+TEST(HeadController, EmergencyStopFreezesTheOutput) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    uint32_t ms = 0;
+    for (; ms < 15000; ms += 10) { vision.see(0.8f, 0.0f, ms); hc.update(ms); }
+
+    hc.emergencyStop();
+    const float frozen_yaw = sink.last.yaw_deg;
+    const float frozen_pitch = sink.last.pitch_deg;
+
+    for (; ms < 18000; ms += 10) { vision.see(-0.9f, 0.9f, ms); hc.update(ms); }
+
+    EXPECT_TRUE(hc.emergencyStopped());
+    EXPECT_NEAR(sink.last.yaw_deg, frozen_yaw, 1e-3f);
+    EXPECT_NEAR(sink.last.pitch_deg, frozen_pitch, 1e-3f);
+}
+
+TEST(HeadController, TrackingIsDisabledUntilTheSelfTestPasses) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    EXPECT_EQ(hc.selfTestState(), SelfTestState::kRunning);
+    // During the test the face is ignored: the source is never the tracker.
+    for (uint32_t ms = 0; ms < 3000; ms += 10) {
+        vision.see(0.9f, 0.0f, ms);
+        hc.update(ms);
+        EXPECT_NE(hc.diagnostics().source, MixSource::kAttention);
+    }
+}
+
+TEST(HeadController, SelfTestStaysWithinItsOwnSmallAmplitudes) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    for (uint32_t ms = 0; ms < 12000 && hc.selfTestState() == SelfTestState::kRunning;
+         ms += 10) {
+        hc.update(ms);
+        if (!sink.last.valid) continue;
+        EXPECT_LE(std::fabs(sink.last.yaw_deg - Neutral().yaw_deg), 10.0f + 1e-3f);
+        EXPECT_LE(std::fabs(sink.last.pitch_deg - Neutral().pitch_deg), 5.0f + 1e-3f);
+    }
+    EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
+}
