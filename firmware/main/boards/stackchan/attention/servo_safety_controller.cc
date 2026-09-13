@@ -46,6 +46,7 @@ const char* ToString(Behavior b) {
         case Behavior::LOOK_CENTER: return "LOOK_CENTER";
         case Behavior::THINK:       return "THINK";
         case Behavior::SLEEP:       return "SLEEP";
+        case Behavior::GREET:       return "GREET";
     }
     return "?";
 }

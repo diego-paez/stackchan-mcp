@@ -57,6 +57,10 @@ enum class Behavior : uint8_t {
     LOOK_CENTER,
     THINK,
     SLEEP,
+    // Runs once after the self-test, then hands to ATTEND_FACE. Tracking is
+    // off throughout: the greeting and the face tracker must never be
+    // steering the same head at the same time.
+    GREET,
 };
 
 const char* ToString(Behavior b);

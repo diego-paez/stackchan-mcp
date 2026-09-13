@@ -8,8 +8,11 @@
 // Nothing here touches ESP-IDF, a camera or a servo.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
+#include <vector>
 
 #include "attention/attention_controller.h"
 #include "attention/behavior_manager.h"
@@ -423,4 +426,151 @@ TEST(HeadController, SelfTestStaysWithinItsOwnSmallAmplitudes) {
         EXPECT_LE(std::fabs(sink.last.pitch_deg - Neutral().pitch_deg), 5.0f + 1e-3f);
     }
     EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
+}
+
+// ---------------------------------------------------------------------------
+// Greeting routine
+//
+// The greeting is the first expressive movement the robot makes and the first
+// thing a stranger sees, so it gets the same treatment as everything else that
+// can move the head: prove it cannot escape the envelope, cannot start before
+// the safety layer has been shown to work, and cannot fight the face tracker.
+// ---------------------------------------------------------------------------
+
+TEST(Greeting, DoesNotStartUntilTheSelfTestPasses) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    // Through the whole self-test — 9 beats at 1200 ms, so ~10.8 s — nothing
+    // of the greeting has happened.
+    for (uint32_t ms = 0; ms < 12000; ms += 10) {
+        hc.update(ms);
+        if (hc.selfTestState() != SelfTestState::kPassed) {
+            EXPECT_FALSE(hc.greeting());
+            EXPECT_NE(hc.behavior(), Behavior::GREET);
+        }
+    }
+    EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
+}
+
+TEST(Greeting, SpeaksItsLineOnceAndShowsExpressions) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+
+    std::vector<std::string> said;
+    std::vector<std::string> shown;
+    hc.setGreetingSpeechSink([&](const char* s) { said.push_back(s); });
+    hc.setGreetingExpressionSink([&](const char* e) { shown.push_back(e); });
+
+    hc.begin(0);
+    for (uint32_t ms = 0; ms < 30000; ms += 10) hc.update(ms);
+
+    ASSERT_EQ(said.size(), 1u) << "the line must be spoken exactly once";
+    EXPECT_EQ(said[0], "Greetings, I am Stacky");
+
+    ASSERT_FALSE(shown.empty());
+    EXPECT_EQ(shown.front(), "neutral");
+    EXPECT_EQ(shown.back(), "neutral") << "must settle back to a neutral face";
+    EXPECT_NE(std::find(shown.begin(), shown.end(), "happy"), shown.end());
+}
+
+TEST(Greeting, HandsOverToFaceTrackingWhenDone) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    bool saw_greeting = false;
+    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+        hc.update(ms);
+        if (hc.greeting()) {
+            saw_greeting = true;
+            // While greeting, the tracker must not also be steering.
+            EXPECT_EQ(hc.behavior(), Behavior::GREET);
+        }
+    }
+    EXPECT_TRUE(saw_greeting);
+    EXPECT_TRUE(hc.greetingFinished());
+    EXPECT_EQ(hc.behavior(), Behavior::ATTEND_FACE)
+        << "the robot must end up tracking faces, not stuck in the greeting";
+}
+
+TEST(Greeting, NeverLeavesTheSafeEnvelope) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    const ServoLimits lim = Limits();
+    float prev_yaw = Neutral().yaw_deg, prev_pitch = Neutral().pitch_deg;
+    bool first = true;
+
+    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+        hc.update(ms);
+        if (!sink.last.valid) continue;
+        EXPECT_GE(sink.last.yaw_deg, lim.min_yaw_deg - 1e-3f);
+        EXPECT_LE(sink.last.yaw_deg, lim.max_yaw_deg + 1e-3f);
+        EXPECT_GE(sink.last.pitch_deg, lim.min_pitch_deg - 1e-3f);
+        EXPECT_LE(sink.last.pitch_deg, lim.max_pitch_deg + 1e-3f);
+        if (!first) {
+            EXPECT_LE(std::fabs(sink.last.yaw_deg - prev_yaw), lim.max_step_deg + 1e-3f);
+            EXPECT_LE(std::fabs(sink.last.pitch_deg - prev_pitch), lim.max_step_deg + 1e-3f);
+        }
+        prev_yaw = sink.last.yaw_deg;
+        prev_pitch = sink.last.pitch_deg;
+        first = false;
+    }
+}
+
+TEST(Greeting, EmergencyStopSilencesItMidSentence) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+
+    std::vector<std::string> said;
+    hc.setGreetingSpeechSink([&](const char* s) { said.push_back(s); });
+    hc.begin(0);
+
+    // Run until the greeting is under way, then pull the cord.
+    uint32_t ms = 0;
+    for (; ms < 30000 && !hc.greeting(); ms += 10) hc.update(ms);
+    ASSERT_TRUE(hc.greeting());
+
+    hc.emergencyStop();
+    const size_t said_at_stop = said.size();
+    for (; ms < 40000; ms += 10) hc.update(ms);
+
+    EXPECT_FALSE(hc.greeting()) << "a stopped robot must not keep performing";
+    EXPECT_EQ(said.size(), said_at_stop) << "and must not speak after the stop";
+    EXPECT_TRUE(hc.emergencyStopped());
+}
+
+TEST(Greeting, CanBeDisabledAndThenTrackingStartsImmediately) {
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.setGreetingEnabled(false);
+    hc.begin(0);
+
+    for (uint32_t ms = 0; ms < 20000; ms += 10) {
+        hc.update(ms);
+        EXPECT_FALSE(hc.greeting());
+    }
+    EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
+    EXPECT_EQ(hc.behavior(), Behavior::ATTEND_FACE);
 }

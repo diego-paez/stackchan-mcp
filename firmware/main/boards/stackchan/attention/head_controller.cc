@@ -60,6 +60,7 @@ HeadController::HeadController(VisionTracker& vision, ServoSink& sink,
       motion_(motion_cfg, neutral),
       mixer_(neutral),
       neutral_(neutral),
+      greeting_(neutral),
       schedule_(schedule) {}
 
 void HeadController::begin(uint32_t now_ms) {
@@ -91,6 +92,7 @@ void HeadController::emergencyStop() {
     safety_.emergencyStop();
     attention_.setEnabled(false);
     attention_.reset();
+    greeting_.cancel();
     ATT_LOGW("EMERGENCY STOP — holding position, all behaviour cancelled");
 }
 
@@ -104,16 +106,31 @@ void HeadController::clearEmergencyStop(uint32_t now_ms) {
 void HeadController::runSelfTest(uint32_t now_ms) {
     if (self_test_step_ >= kSelfTestCount) {
         self_test_ = SelfTestState::kPassed;
-        attention_.setEnabled(behavior_.settings().tracking_enabled);
-        behavior_.setBehavior(Behavior::ATTEND_FACE, now_ms);
-        ATT_LOGI("self-test passed: %u clamped, %u rejected — enabling tracking",
+        ATT_LOGI("self-test passed: %u clamped, %u rejected",
                  (unsigned)safety_.clampedCount(), (unsigned)safety_.rejectedCount());
+        if (greeting_enabled_) {
+            // Expressive movement only now that the safety layer has been
+            // shown to work on this unit. Tracking stays off until the
+            // greeting is done, so the two never fight over the head.
+            behavior_.setBehavior(Behavior::GREET, now_ms);
+            greeting_.start(now_ms);
+            ATT_LOGI("greeting: %d beats, %u ms scripted",
+                     greeting_.stepCount(), (unsigned)greeting_.totalDurationMs());
+        } else {
+            beginTracking(now_ms);
+        }
         return;
     }
     if ((now_ms - self_test_step_ms_) >= kSelfTestStepMs) {
         ++self_test_step_;
         self_test_step_ms_ = now_ms;
     }
+}
+
+void HeadController::beginTracking(uint32_t now_ms) {
+    attention_.setEnabled(behavior_.settings().tracking_enabled);
+    behavior_.setBehavior(Behavior::ATTEND_FACE, now_ms);
+    ATT_LOGI("tracking enabled");
 }
 
 void HeadController::driveTo(const HeadPose& target, float dt_sec, uint32_t now_ms) {
@@ -148,6 +165,10 @@ void HeadController::update(uint32_t now_ms) {
         last_behavior_ms_ = now_ms;
         behavior_.update(now_ms);
         if (self_test_ == SelfTestState::kRunning) runSelfTest(now_ms);
+        if (greeting_.running()) {
+            greeting_.update(now_ms);
+            if (greeting_.finished()) beginTracking(now_ms);
+        }
     }
 
     if ((now_ms - last_vision_ms_) >= schedule_.vision_period_ms) {
@@ -177,6 +198,9 @@ void HeadController::update(uint32_t now_ms) {
                                                              : kSelfTestCount - 1;
             target.yaw_deg = neutral_.yaw_deg + kSelfTest[i].dyaw;
             target.pitch_deg = neutral_.pitch_deg + kSelfTest[i].dpitch;
+            diag_.source = MixSource::kBehaviorPose;
+        } else if (greeting_.running()) {
+            target = greeting_.pose();
             diag_.source = MixSource::kBehaviorPose;
         } else {
             const BehaviorSettings s = behavior_.settings();

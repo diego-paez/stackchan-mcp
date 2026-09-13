@@ -61,6 +61,15 @@ void BehaviorManager::apply(Behavior b) {
             s.fixed_pose.pitch_deg = neutral_.pitch_deg;
             s.speed_scale = 0.4f;
             break;
+        case Behavior::GREET:
+            // The greeting routine supplies a pose per beat and HeadController
+            // feeds it straight to the motion controller, so this case must
+            // NOT offer a fixed pose of its own — two opinions about the head
+            // is exactly what the mixer exists to prevent. Tracking is off for
+            // the duration; ATTEND_FACE is restored when the routine ends.
+            s.tracking_enabled = false;
+            s.has_fixed_pose = false;
+            break;
         case Behavior::IDLE:
         default:
             s.tracking_enabled = false;

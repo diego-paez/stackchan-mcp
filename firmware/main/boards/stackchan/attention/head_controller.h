@@ -16,9 +16,11 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "attention_controller.h"
 #include "behavior_manager.h"
+#include "greeting_routine.h"
 #include "motion_controller.h"
 #include "motion_mixer.h"
 #include "servo_safety_controller.h"
@@ -88,6 +90,20 @@ public:
     SelfTestState selfTestState() const { return self_test_; }
     Diagnostics diagnostics() const { return diag_; }
 
+    // --- greeting ---------------------------------------------------------
+    // Runs once, after the self-test passes and before tracking starts. The
+    // sinks are optional; set them before begin() or the first beats go
+    // nowhere. Disabling it hands straight from the self-test to tracking.
+    void setGreetingEnabled(bool on) { greeting_enabled_ = on; }
+    void setGreetingExpressionSink(GreetingRoutine::ExpressionFn fn) {
+        greeting_.setExpressionSink(std::move(fn));
+    }
+    void setGreetingSpeechSink(GreetingRoutine::SpeechFn fn) {
+        greeting_.setSpeechSink(std::move(fn));
+    }
+    bool greeting() const { return greeting_.running(); }
+    bool greetingFinished() const { return greeting_.finished(); }
+
     // Diagnostics printing is opt-in and rate-limited: at 40 Hz an
     // unconditional log line is a denial of service on the serial port.
     void setDiagnosticsEnabled(bool on) { diag_enabled_ = on; }
@@ -102,6 +118,7 @@ public:
 
 private:
     void runSelfTest(uint32_t now_ms);
+    void beginTracking(uint32_t now_ms);
     void driveTo(const HeadPose& target, float dt_sec, uint32_t now_ms);
     void emit(uint32_t now_ms);
 
@@ -125,6 +142,9 @@ private:
     SelfTestState self_test_ = SelfTestState::kNotStarted;
     int self_test_step_ = 0;
     uint32_t self_test_step_ms_ = 0;
+
+    GreetingRoutine greeting_;
+    bool greeting_enabled_ = true;
 
     bool started_ = false;
     bool diag_enabled_ = true;

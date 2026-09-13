@@ -66,6 +66,7 @@ add_executable(attention_safety_test
     ../main/boards/stackchan/attention/behavior_manager.cc
     ../main/boards/stackchan/attention/motion_mixer.cc
     ../main/boards/stackchan/attention/head_controller.cc
+    ../main/boards/stackchan/attention/greeting_routine.cc
 )
 
 target_include_directories(attention_safety_test

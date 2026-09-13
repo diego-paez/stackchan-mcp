@@ -44,7 +44,56 @@ board's existing `WriteHeadAngles()`.
     servo_safety_controller.{h,cc}  clamp, rate limit, reject, watchdog, e-stop
     servo_sink.h                the one door to hardware (+ a recording fake)
     board_servo_sink.h          adapter onto StackChanBoard::WriteHeadAngles
+    greeting_routine.{h,cc}     the scripted introduction, played once on waking
     head_controller.{h,cc}      wires it together and schedules it
+
+## Startup sequence
+
+The order is fixed, and the reason is safety rather than presentation:
+
+    begin()
+      │
+      ├─ read the real pose and sync to it        no "boot snap"
+      ├─ move to neutral, slowly
+      ├─ self-test    ±10° yaw, ±5° pitch, 1.2 s per beat, ~10.8 s
+      │                tracking disabled throughout
+      │
+      ├─ greeting     8 beats, ~5 s               ← only if the self-test passed
+      │                "Greetings, I am Stacky"
+      │                tracking still disabled
+      │
+      └─ ATTEND_FACE  tracking enabled
+
+Expressive movement does not happen until the safety layer has been shown to
+work on this particular unit. If the self-test fails, the greeting never runs
+and tracking never starts.
+
+`GreetingRoutine` is a table of keyframes — yaw offset, gaze offset,
+expression, optional line, dwell — stepped by the same scheduler as everything
+else. It writes no angle: it offers a pose, exactly as a behaviour does, and
+that pose goes through the motion controller and the safety filter like any
+other. `Behavior::GREET` therefore sets `has_fixed_pose = false`, so there is
+still only one opinion about where the head should be.
+
+Amplitudes stay well inside the envelope — yaw within ±14° of ±30°, gaze
+within ±8° — so the safety layer is never the thing deciding where the head
+stops during a greeting.
+
+Expression and speech leave through `std::function` sinks:
+
+    head.setGreetingExpressionSink([display](const char* e) {
+        display->SetEmotion(e);            // "neutral", "happy", "surprised"
+    });
+    head.setGreetingSpeechSink([](const char* line) {
+        // whatever this firmware's speech path turns out to be
+    });
+
+Both are optional. Unset, the greeting still moves — which is what the host
+tests run, and what a unit with no speaker does. `setGreetingEnabled(false)`
+skips it entirely and hands straight from the self-test to tracking.
+
+An emergency stop cancels a greeting in progress and fires no further sinks:
+a stopped robot must not keep performing, and must not finish its sentence.
 
 ## Building and testing
 
@@ -173,7 +222,15 @@ Stated explicitly, because several are unverified.
    `VisionTracker` is therefore an interface, with `ScriptedVisionTracker`
    standing in. Everything downstream is finished and tested; swapping in a
    real detector is one class.
-8. **Servo presence is unverified.** Whether the unit this is destined for
+8. **"Up" is the positive pitch direction.** `AttentionController` documents
+   image y as growing downward while pitch grows upward, and defaults
+   `invert_pitch` to true on that basis. The greeting script is written in
+   gaze terms — "look up", "nod down" — and that assumption is applied in one
+   place, `kPitchUpIsPositive` in `greeting_routine.h`. If the head nods when
+   it should raise its gaze, that constant is the fix, not the eight rows of
+   the table. Unverified on hardware.
+
+9. **Servo presence is unverified.** Whether the unit this is destined for
    has the servo base attached at all has not been confirmed. If it does not,
    the self-test is the safe way to find out: it moves ±10° yaw and ±5° pitch
    slowly and reports.
