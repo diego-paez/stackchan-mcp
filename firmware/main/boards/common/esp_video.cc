@@ -1039,3 +1039,23 @@ std::string EspVideo::Explain(const std::string& question) {
              (int)frame_.len, (int)total_sent, (int)remain_stack_size, question.c_str(), result.c_str());
     return result;
 }
+
+bool EspVideo::PeekFrame(CameraFrame* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    // frame_ is filled by Capture() and points into the mmap'd V4L2 buffer.
+    // Nothing is copied here: the caller gets a borrowed view that is valid
+    // until the next capture, which is exactly the contract Camera::PeekFrame
+    // documents. Copying a 320x240 RGB565 frame would cost 150 KB per look.
+    if (frame_.data == nullptr || frame_.len == 0 ||
+        frame_.width == 0 || frame_.height == 0) {
+        return false;
+    }
+    out->data = frame_.data;
+    out->len = frame_.len;
+    out->width = frame_.width;
+    out->height = frame_.height;
+    out->fourcc = static_cast<uint32_t>(frame_.format);
+    return true;
+}

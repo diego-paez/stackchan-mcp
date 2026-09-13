@@ -16,6 +16,7 @@
 
 #include "attention/attention_controller.h"
 #include "attention/behavior_manager.h"
+#include "attention/face_geometry.h"
 #include "attention/head_controller.h"
 #include "attention/motion_controller.h"
 #include "attention/motion_mixer.h"
@@ -601,4 +602,117 @@ TEST(HeadController, ActuallyFollowsAFaceOnceStartupIsDone) {
         << "a visible face must register as a target";
     EXPECT_GT(std::fabs(sink.last.yaw_deg - yaw_before), 3.0f)
         << "the head must actually turn toward it";
+}
+
+// ---------------------------------------------------------------------------
+// Face geometry — box in pixels to FaceTarget in -1..+1
+//
+// The failure mode this guards is not a crash. A sign error here yields a head
+// that turns smoothly, confidently, and the wrong way.
+// ---------------------------------------------------------------------------
+
+TEST(FaceGeometry, CentredFaceIsAtTheOrigin) {
+    // 160x120, a 40x40 face dead centre.
+    DetectedBox b{60, 40, 100, 80, 0.9f};
+    const FaceTarget t = BoxToTarget(b, 160, 120, 1000);
+    EXPECT_TRUE(t.visible);
+    EXPECT_NEAR(t.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(t.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(t.confidence, 0.9f, 1e-5f);
+    EXPECT_EQ(t.last_seen_ms, 1000u);
+}
+
+TEST(FaceGeometry, RightOfFrameIsPositiveXAndBottomIsPositiveY) {
+    // Image coordinates grow rightward and DOWNWARD. AttentionController
+    // inverts pitch itself; flipping y here would double-invert it.
+    DetectedBox right{120, 40, 160, 80, 0.8f};
+    EXPECT_GT(BoxToTarget(right, 160, 120, 0).x, 0.4f);
+
+    DetectedBox low{60, 80, 100, 120, 0.8f};
+    EXPECT_GT(BoxToTarget(low, 160, 120, 0).y, 0.4f)
+        << "a face low in the frame must give POSITIVE y";
+
+    DetectedBox high{60, 0, 100, 40, 0.8f};
+    EXPECT_LT(BoxToTarget(high, 160, 120, 0).y, -0.4f)
+        << "a face high in the frame must give NEGATIVE y";
+}
+
+TEST(FaceGeometry, SizeIsTheLargerEdgeAsAFraction) {
+    DetectedBox b{0, 0, 80, 30, 0.7f};       // 80 wide of 160, 30 tall of 120
+    const FaceTarget t = BoxToTarget(b, 160, 120, 0);
+    EXPECT_NEAR(t.size, 0.5f, 1e-5f);        // max(80/160, 30/120) = 0.5
+}
+
+TEST(FaceGeometry, NeverLeavesTheUnitSquare) {
+    // A face half out of shot: the box runs past the frame edge.
+    DetectedBox b{140, 100, 260, 220, 0.95f};
+    const FaceTarget t = BoxToTarget(b, 160, 120, 0);
+    EXPECT_LE(t.x, 1.0f); EXPECT_GE(t.x, -1.0f);
+    EXPECT_LE(t.y, 1.0f); EXPECT_GE(t.y, -1.0f);
+    EXPECT_LE(t.size, 1.0f); EXPECT_GE(t.size, 0.0f);
+    EXPECT_LE(t.confidence, 1.0f);
+}
+
+TEST(FaceGeometry, RejectsDegenerateBoxes) {
+    EXPECT_FALSE(BoxToTarget(DetectedBox{50, 50, 50, 80, 0.9f}, 160, 120, 0).visible)
+        << "zero width";
+    EXPECT_FALSE(BoxToTarget(DetectedBox{100, 50, 40, 80, 0.9f}, 160, 120, 0).visible)
+        << "corners the wrong way round";
+    EXPECT_FALSE(BoxToTarget(DetectedBox{10, 10, 50, 50, 0.9f}, 0, 0, 0).visible)
+        << "a frame with no size";
+    EXPECT_FALSE(BoxToTarget(DetectedBox{200, 10, 260, 50, 0.9f}, 160, 120, 0).visible)
+        << "entirely off the right edge";
+}
+
+TEST(FaceGeometry, PicksTheNearestFaceNotTheMostConfidentOne) {
+    // A group of children: the one closest to the robot is almost always the
+    // one talking to it, and box area is the only depth cue a single camera
+    // gives. A confident detection of a distant face must not win.
+    std::vector<DetectedBox> faces = {
+        {10, 10,  30,  30, 0.99f},   // small, very confident — someone behind
+        {60, 30, 130, 100, 0.71f},   // large, less confident — the child in front
+    };
+    const DetectedBox* p = PickPrimaryFace(faces.begin(), faces.end(), 160, 120);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(p->left, 60) << "the larger box must win";
+
+    // Equal area: the score breaks the tie.
+    std::vector<DetectedBox> tie = {
+        {0, 0, 40, 40, 0.60f},
+        {80, 0, 120, 40, 0.90f},
+    };
+    const DetectedBox* q = PickPrimaryFace(tie.begin(), tie.end(), 160, 120);
+    ASSERT_NE(q, nullptr);
+    EXPECT_FLOAT_EQ(q->score, 0.90f);
+}
+
+TEST(FaceGeometry, EmptyOrAllUnusableGivesNothing) {
+    std::vector<DetectedBox> none;
+    EXPECT_EQ(PickPrimaryFace(none.begin(), none.end(), 160, 120), nullptr);
+
+    std::vector<DetectedBox> junk = {{50, 50, 50, 50, 0.9f}, {90, 10, 20, 40, 0.9f}};
+    EXPECT_EQ(PickPrimaryFace(junk.begin(), junk.end(), 160, 120), nullptr);
+}
+
+TEST(FaceGeometry, FeedsTheAttentionControllerCoherently) {
+    // End to end through the real controller: a face low and to the right of
+    // frame must move the target right and, because the controller inverts
+    // pitch, DOWN in gaze — i.e. toward the child.
+    AttentionConfig cfg;
+    AttentionController att(cfg, Neutral());
+    att.setEnabled(true);
+    att.reset();
+
+    DetectedBox b{120, 90, 158, 118, 0.9f};      // right, low
+    const FaceTarget t = BoxToTarget(b, 160, 120, 100);
+    ASSERT_TRUE(t.visible);
+
+    for (uint32_t ms = 100; ms < 1600; ms += 50) {
+        FaceTarget f = t; f.last_seen_ms = ms;
+        att.update(f, ms, 0.05f);
+    }
+    EXPECT_GT(att.getTarget().yaw_deg, Neutral().yaw_deg + 1.0f)
+        << "a face to the right must turn the head right";
+    EXPECT_LT(att.getTarget().pitch_deg, Neutral().pitch_deg - 0.5f)
+        << "a face low in frame must lower the gaze";
 }

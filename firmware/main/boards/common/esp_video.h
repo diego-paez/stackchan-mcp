@@ -50,4 +50,8 @@ public:
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);
+
+    // Lend the last captured frame to an on-device consumer. See
+    // Camera::PeekFrame. Returns false until Capture() has produced one.
+    virtual bool PeekFrame(CameraFrame* out) override;
 };

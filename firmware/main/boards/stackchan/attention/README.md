@@ -15,7 +15,7 @@ Priority order, as specified: **safety > stability > smoothness > tracking speed
 | Behaviour manager (IDLE / ATTEND_FACE / LOOK_CENTER / THINK / SLEEP) | written, tested |
 | Servo self-test | written, tested |
 | Board integration adapter | written, **not compiled** — see Assumptions |
-| Face detection | **not implemented** — see Assumptions |
+| Face detection | written, **not compiled** — esp-dl adapter + tested geometry |
 
 Nothing here has run on hardware.
 
@@ -45,6 +45,8 @@ board's existing `WriteHeadAngles()`.
     servo_sink.h                the one door to hardware (+ a recording fake)
     board_servo_sink.h          adapter onto StackChanBoard::WriteHeadAngles
     greeting_routine.{h,cc}     the scripted introduction, played once on waking
+    face_geometry.h             detector box -> FaceTarget; pure, host-tested
+    espdl_face_tracker.{h,cc}   the real VisionTracker, backed by esp-dl
     head_controller.{h,cc}      wires it together and schedules it
 
 ## Startup sequence
@@ -209,20 +211,33 @@ Stated explicitly, because several are unverified.
 6. **Not compiled against ESP-IDF.** No `idf.py` and no `IDF_PATH` on the
    machine this was written on, so the adapter and the `ESP_LOGx` path are
    unverified. The controllers and their tests are verified, on the host.
-7. **Face detection is not implemented.** Two things block it, and both are
-   design decisions rather than work items:
-   * `Camera` (`boards/common/camera.h`) exposes `Capture()` and
-     `Explain(question)` and deliberately hands pixels to nobody —
-     `Esp32Camera::current_fb_` is private. Local inference needs a frame
-     accessor added there.
-   * esp-dl / `human_face_detect` is not a dependency of this firmware
-     (`main/idf_component.yml`), and adding it has a PSRAM cost that has to
-     be weighed against the audio buffers already resident.
+7. **Face detection is written but never compiled.** `espdl_face_tracker`
+   targets `espressif/human_face_detect` ^0.2.0, which pulls
+   `espressif/esp-dl` ^3.0.0 and is declared in `main/idf_component.yml` for
+   esp32s3 and esp32p4. The API was read from the published component rather
+   than guessed: `HumanFaceDetect::run(const dl::image::img_t&)` returning
+   `std::list<dl::detect::result_t>&`, boxes as `[left, top, right, bottom]`.
+   None of it has been through a compiler — there is no ESP-IDF on the machine
+   where it was written. Treat the adapter as a first draft; the geometry it
+   depends on is tested and is the part that fails silently.
 
-   `VisionTracker` is therefore an interface, with `ScriptedVisionTracker`
-   standing in. Everything downstream is finished and tested; swapping in a
-   real detector is one class.
-8. **"Up" is the positive pitch direction.** `AttentionController` documents
+   Two facts from the component's own documentation shape the design. On the
+   S3 the first stage costs ~41 ms and each candidate ~6 ms, so one face is
+   ~48 ms — hence a dedicated task at 5 Hz rather than a call from the head
+   loop, which runs at 40 Hz. And the models are published only for esp32s3
+   and esp32p4, which is why the dependency is gated.
+
+
+8. **The camera's pixel format is not known in advance.** `EspVideo`
+   negotiates with the sensor at runtime and prefers YUV422P, then RGB565,
+   then RGB24 — so what arrives is a property of the camera module. esp-dl
+   reads RGB565, RGB888 and GRAY. If the sensor settles on YUV the tracker
+   logs once and reports nobody, rather than reinterpreting the bytes, which
+   would produce confident detections of faces that are not there. The fix is
+   either to force RGB565 in the format negotiation or to convert with
+   `esp_imgfx_color_convert`, which this firmware already links.
+
+9. **"Up" is the positive pitch direction.** `AttentionController` documents
    image y as growing downward while pitch grows upward, and defaults
    `invert_pitch` to true on that basis. The greeting script is written in
    gaze terms — "look up", "nod down" — and that assumption is applied in one
@@ -230,7 +245,7 @@ Stated explicitly, because several are unverified.
    it should raise its gaze, that constant is the fix, not the eight rows of
    the table. Unverified on hardware.
 
-9. **Servo presence is unverified.** Whether the unit this is destined for
+10. **Servo presence is unverified.** Whether the unit this is destined for
    has the servo base attached at all has not been confirmed. If it does not,
    the self-test is the safe way to find out: it moves ±10° yaw and ±5° pitch
    slowly and reports.
