@@ -76,3 +76,18 @@ target_include_directories(attention_safety_test
 target_link_libraries(attention_safety_test PRIVATE GTest::gtest_main)
 
 add_test(NAME attention_safety_test COMMAND attention_safety_test)
+
+# Not a test — a simulation you read. Prints the timeline of a boot: the
+# safety self-test, the greeting, then the head following a child who moves
+# around and leaves the frame. Nothing is asserted; the tests do that.
+add_executable(sim_greeting
+    sim_greeting.cc
+    ../main/boards/stackchan/attention/servo_safety_controller.cc
+    ../main/boards/stackchan/attention/attention_controller.cc
+    ../main/boards/stackchan/attention/motion_controller.cc
+    ../main/boards/stackchan/attention/behavior_manager.cc
+    ../main/boards/stackchan/attention/motion_mixer.cc
+    ../main/boards/stackchan/attention/head_controller.cc
+    ../main/boards/stackchan/attention/greeting_routine.cc
+)
+target_include_directories(sim_greeting PRIVATE ../main/boards/stackchan)

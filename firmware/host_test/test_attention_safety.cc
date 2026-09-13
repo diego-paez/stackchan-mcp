@@ -574,3 +574,31 @@ TEST(Greeting, CanBeDisabledAndThenTrackingStartsImmediately) {
     EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
     EXPECT_EQ(hc.behavior(), Behavior::ATTEND_FACE);
 }
+
+TEST(HeadController, ActuallyFollowsAFaceOnceStartupIsDone) {
+    // The regression this exists for: everything reported healthy — self-test
+    // passed, behaviour ATTEND_FACE — while the attention controller sat
+    // disabled, because tracking was enabled by asking the behaviour that was
+    // on its way out. The head simply never moved toward anyone.
+    ScriptedVisionTracker vision;
+    RecordingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(),
+                      AttentionConfig{}, MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    uint32_t ms = 0;
+    for (; ms < 30000 && !hc.greetingFinished(); ms += 10) hc.update(ms);
+    ASSERT_EQ(hc.behavior(), Behavior::ATTEND_FACE);
+
+    const float yaw_before = sink.last.yaw_deg;
+    for (uint32_t end = ms + 4000; ms < end; ms += 10) {
+        vision.see(-0.6f, 0.0f, ms);   // a face well off to one side
+        hc.update(ms);
+    }
+
+    EXPECT_NE(hc.diagnostics().tracking, TrackingState::kNoTarget)
+        << "a visible face must register as a target";
+    EXPECT_GT(std::fabs(sink.last.yaw_deg - yaw_before), 3.0f)
+        << "the head must actually turn toward it";
+}

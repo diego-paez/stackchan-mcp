@@ -128,8 +128,15 @@ void HeadController::runSelfTest(uint32_t now_ms) {
 }
 
 void HeadController::beginTracking(uint32_t now_ms) {
-    attention_.setEnabled(behavior_.settings().tracking_enabled);
+    // Behaviour first, then read its settings. The other order asks the
+    // *outgoing* behaviour whether tracking should be on — and the behaviour
+    // on the way out is always one that had it off (LOOK_CENTER while the
+    // self-test ran, GREET while the robot introduced itself). The attention
+    // controller was therefore left disabled and the head never followed a
+    // face, silently: everything else worked, the behaviour read
+    // ATTEND_FACE, and the only symptom was a robot that ignored you.
     behavior_.setBehavior(Behavior::ATTEND_FACE, now_ms);
+    attention_.setEnabled(behavior_.settings().tracking_enabled);
     ATT_LOGI("tracking enabled");
 }
 
