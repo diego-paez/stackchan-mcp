@@ -60,8 +60,8 @@ HeadController::HeadController(VisionTracker& vision, ServoSink& sink,
       motion_(motion_cfg, neutral),
       mixer_(neutral),
       neutral_(neutral),
-      greeting_(neutral),
-      schedule_(schedule) {}
+      schedule_(schedule),
+      greeting_(neutral) {}
 
 void HeadController::begin(uint32_t now_ms) {
     // Seed from the real pose. Without this the first command interpolates

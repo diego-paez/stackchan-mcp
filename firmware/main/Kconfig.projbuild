@@ -93,6 +93,21 @@ config FORCE_DEFAULT_WEBSOCKET_URL
         Default disabled to preserve NVS-priority semantics for end users
         who configure the URL/token via runtime tooling.
 
+config STACKCHAN_FACE_DETECT
+    bool "On-device face detection for the attention system"
+    default n
+    help
+        When enabled, the head can find and follow a face by itself using
+        espressif/human_face_detect on the camera feed.
+
+        Default DISABLED, and the reason is size rather than taste. The model
+        weights push the app image to about 4.68 MB against a 4032K OTA
+        partition — an overflow of roughly 760 KB — so enabling this also
+        requires a partition layout with room for it, or moving the weights
+        into a partition of their own. Head control, the greeting and the face
+        mimic all work without it; the head simply has nothing to follow, which
+        the attention system already treats as an empty room.
+
 config STACKCHAN_MDNS_DISCOVERY
     bool "Discover stackchan-mcp gateway with mDNS"
     default y if BOARD_TYPE_STACKCHAN

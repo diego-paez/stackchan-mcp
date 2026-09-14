@@ -22,7 +22,7 @@
 // update(). It was written for exactly this.
 #pragma once
 
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && defined(CONFIG_STACKCHAN_FACE_DETECT)
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -112,4 +112,4 @@ private:
 }  // namespace attention
 }  // namespace stackchan
 
-#endif  // ESP_PLATFORM
+#endif  // ESP_PLATFORM && CONFIG_STACKCHAN_FACE_DETECT

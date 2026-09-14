@@ -863,6 +863,15 @@ if(CONFIG_BOARD_TYPE_STACKCHAN)
             "${CMAKE_CURRENT_SOURCE_DIR}/../components/feetech_scs")
         message(STATUS "StackChan: using MIT FeetechScs driver, excluding SCServo_lib sources from build")
     endif()
+
+    # attention/ — autonomous head control and the face mimic. The BOARD_SOURCES
+    # glob above is deliberately shallow (*.cc in the board directory), so this
+    # subdirectory has to be listed rather than picked up. The controllers are
+    # free of ESP-IDF and are unit-tested on the host; see
+    # boards/stackchan/attention/README.md.
+    file(GLOB STACKCHAN_ATTENTION_SOURCES ${STACKCHAN_BOARD_DIR}/attention/*.cc)
+    list(APPEND BOARD_SOURCES ${STACKCHAN_ATTENTION_SOURCES})
+    list(APPEND INCLUDE_DIRS ${STACKCHAN_BOARD_DIR})
 endif()
 list(APPEND SOURCES ${BOARD_SOURCES})
 

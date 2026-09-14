@@ -43,14 +43,23 @@ dependencies:
     rules:
     - if: target in [esp32s3]
 
-  # On-device face detection for the attention system. The model component
-  # pulls espressif/esp-dl ^3.0.0 in itself, so that is not listed separately.
-  # Only these two targets have published models, and it is a few megabytes of
-  # weights, so it is gated rather than fetched for every board.
+  # On-device face detection for the attention system. Only these two targets
+  # have published models, and it is a few megabytes of weights, so it is gated
+  # rather than fetched for every board.
+  #
+  # The version pin is not cosmetic. This component carries its own esp-dl
+  # dependency, and esp-dl has made breaking API changes INSIDE a caret range:
+  # human_face_detect 0.2.3 asks for esp-dl ^3.1.3, the resolver honours that
+  # with 3.3.0, and the component then fails to compile against it —
+  # DL_IMAGE_CAP_RGB_SWAP is gone, MSRPostprocessor's constructor has changed
+  # arity, MNPPostprocessor has lost set_resize_scale_x, and MSRMNP ends up
+  # abstract. 0.4.1 onward ask for ~3.3.0, which is the pairing that actually
+  # builds. Loosening this back to ^0.2.0 reintroduces the breakage.
   espressif/human_face_detect:
-    version: ^0.2.0
+    version: ^0.5.0
     rules:
     - if: target in [esp32s3, esp32p4]
+    - if: "$CONFIG{STACKCHAN_FACE_DETECT} == True"
   espressif/esp_video:
     version: ==1.3.1   # for compatibility. update version may need to modify this project code.
     rules:

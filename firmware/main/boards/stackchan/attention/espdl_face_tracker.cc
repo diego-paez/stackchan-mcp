@@ -1,6 +1,6 @@
 #include "espdl_face_tracker.h"
 
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && defined(CONFIG_STACKCHAN_FACE_DETECT)
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -30,13 +30,35 @@ namespace {
 bool MapPixelFormat(uint32_t fourcc, dl::image::pix_type_t* out) {
     switch (fourcc) {
         case V4L2_PIX_FMT_RGB565:
-            *out = dl::image::DL_IMAGE_PIX_TYPE_RGB565;
+            // esp-dl 3.3 split this by endianness. V4L2_PIX_FMT_RGB565 is the
+            // little-endian one; V4L2_PIX_FMT_RGB565X is big-endian, and
+            // esp_video.cc already converts that to RGB565 before it reaches
+            // here. Picking BE would not fail — it would swap red and blue on
+            // every frame and quietly cost detection accuracy.
+            *out = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE;
             return true;
         case V4L2_PIX_FMT_RGB24:
             *out = dl::image::DL_IMAGE_PIX_TYPE_RGB888;
             return true;
         case V4L2_PIX_FMT_GREY:
             *out = dl::image::DL_IMAGE_PIX_TYPE_GRAY;
+            return true;
+        case V4L2_PIX_FMT_YUV422P:
+            // Not a reinterpretation — a declaration of what the bytes are.
+            //
+            // Two facts make this correct rather than the mistake the comment
+            // below warns about. esp_video.cc:194 records that this version of
+            // esp_video emits YUYV for the format it labels YUV422P, so the
+            // buffer really is packed YUYV. And esp-dl 3.3 gained a genuine
+            // YUYV pixel type with real conversions behind it
+            // (DL_IMAGE_PIX_CVT_YUYV2RGB888 and friends), so the preprocessor
+            // converts properly instead of the model reading luma as red.
+            //
+            // This matters because the board pins the sensor to YUV422
+            // (CONFIG_CAMERA_GC0308_DVP_YUV422_320X240_20FPS in config.json).
+            // Without this case, face detection on the shipping configuration
+            // sees nobody, forever, and looks exactly like an empty room.
+            *out = dl::image::DL_IMAGE_PIX_TYPE_YUYV;
             return true;
         default:
             return false;
@@ -144,9 +166,9 @@ bool EspDlFaceTracker::DetectOnce(uint32_t now_ms) {
         if (!warned_format_) {
             warned_format_ = true;
             ESP_LOGE(TAG,
-                     "camera gives %s (0x%08x); esp-dl reads only RGB565, "
-                     "RGB24 and GREY, so face tracking is off. Either force "
-                     "RGB565 when the sensor format is negotiated in "
+                     "camera gives %s (0x%08x); esp-dl reads RGB565, RGB24, "
+                     "GREY and YUYV, so face tracking is off. Either pick one "
+                     "of those when the sensor format is negotiated in "
                      "EspVideo, or convert the frame with "
                      "esp_imgfx_color_convert, which this firmware already "
                      "links for the rotate path. Reinterpreting these bytes "
@@ -221,4 +243,4 @@ EspDlFaceTracker::Stats EspDlFaceTracker::stats() const {
 }  // namespace attention
 }  // namespace stackchan
 
-#endif  // ESP_PLATFORM
+#endif  // ESP_PLATFORM && CONFIG_STACKCHAN_FACE_DETECT

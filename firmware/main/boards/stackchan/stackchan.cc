@@ -59,6 +59,17 @@ static inline bool ServoWritePosOk(int r) { return r > 0; }
 #include <string>
 #include <vector>
 
+// Autonomous head control. Everything under attention/ is free of ESP-IDF and
+// unit-tested on the host; this file is the only place it meets hardware.
+#include "attention/board_servo_sink.h"
+#include "attention/espdl_face_tracker.h"
+#include "attention/head_controller.h"
+
+// StackChanBoard lives at global scope; the controllers live in
+// stackchan::attention. The alias keeps the wiring below readable without
+// dragging the whole namespace in with a using-directive.
+namespace attention = stackchan::attention;
+
 #define TAG "StackChanBoard"
 
 // Charge-control boot default (AXP2101 reg 0x18 bit1, see class Pmic below).
@@ -2878,6 +2889,21 @@ private:
 
     bool servo_ok_ = false;
     bool rgb_ok_ = false;
+
+    // --- autonomous head control ------------------------------------------
+    // Built at boot but NOT started. The head already has three writers — the
+    // MCP move_head tool, the touch wobble, and the boot sequence — and a
+    // fourth that starts unbidden on every power-up is exactly what the
+    // attention layer's own one-door rule forbids. begin() runs only when
+    // something explicitly arms it, and the first thing it does is a slow,
+    // bounded self-test.
+    std::unique_ptr<attention::BoardServoSink> attention_sink_;
+    std::unique_ptr<attention::VisionTracker> vision_tracker_;
+#ifdef CONFIG_STACKCHAN_FACE_DETECT
+    std::unique_ptr<attention::EspDlFaceTracker> face_tracker_;   // aliases vision_tracker_ when present
+#endif
+    std::unique_ptr<attention::HeadController> head_;
+    bool attention_armed_ = false;
     static constexpr uint8_t RGB_LED_COUNT = 12;  // StackChan base has 12 WS2812C
     static constexpr uint8_t RGB_DATA_PIN  = 13;  // PY32 expander pin (not ESP32 GPIO)
 
@@ -3030,6 +3056,96 @@ private:
         if (io_expander_->SetLedData(buf, sizeof(buf))) {
             io_expander_->RefreshLeds();
         }
+    }
+
+    // Build the chain. Nothing moves here: begin() is deferred to ArmAttention().
+    void InitializeAttention() {
+        if (!servo_ok_) {
+            ESP_LOGW(TAG, "attention: servo not initialized, head control unavailable");
+            return;
+        }
+
+        attention_sink_ = std::make_unique<attention::BoardServoSink>(
+            [this](int yaw, int pitch, uint32_t ms) {
+                WriteHeadAngles(yaw, pitch, ms, /*prefer_linear=*/true);
+            },
+            [this]() {
+                attention::HeadPose p;
+                p.yaw_deg = static_cast<float>(yaw_motion_.current_deg);
+                p.pitch_deg = static_cast<float>(pitch_motion_.current_deg);
+                return p;
+            },
+            [this]() { return servo_ok_; });
+
+        // The detector is optional. Without a camera — or with one the model
+        // cannot read — the tracker reports nobody, which the attention system
+        // already handles as an empty room. Head control still works; it just
+        // has nothing to follow.
+#ifdef CONFIG_STACKCHAN_FACE_DETECT
+        if (camera_ != nullptr) {
+            attention::FaceTrackerConfig cfg;
+            auto tracker = std::make_unique<attention::EspDlFaceTracker>(camera_, cfg);
+            if (tracker->begin()) {
+                ESP_LOGI(TAG, "attention: face detection running at %u ms",
+                         (unsigned)cfg.detect_period_ms);
+                face_tracker_ = std::move(tracker);
+            } else {
+                ESP_LOGW(TAG, "attention: face detection unavailable, head will not track");
+            }
+        }
+#else
+        ESP_LOGI(TAG, "attention: built without face detection "
+                      "(CONFIG_STACKCHAN_FACE_DETECT); head control, greeting "
+                      "and face mimic all work, there is just nobody to follow");
+#endif
+        attention::VisionTracker* vision = nullptr;
+#ifdef CONFIG_STACKCHAN_FACE_DETECT
+        vision = face_tracker_.get();
+#endif
+        if (vision == nullptr) {
+            // A tracker that reports nobody. The attention system treats that
+            // as an empty room, which is exactly right: the head still runs
+            // its self-test, greets, and holds neutral.
+            vision_tracker_ = std::make_unique<attention::ScriptedVisionTracker>();
+            vision = vision_tracker_.get();
+        }
+
+        head_ = std::make_unique<attention::HeadController>(
+            *vision, *attention_sink_, attention::ServoLimits{},
+            attention::NeutralPose{}, attention::HardwareBounds{},
+            attention::AttentionConfig{}, attention::MotionConfig{},
+            attention::ScheduleConfig{});
+
+        // The face on the screen is the greeting's and the mimic's to write;
+        // SetAvatarExpressionIfActive already no-ops when the avatar is hidden,
+        // so this cannot fight a user who has run set_avatar("off").
+        head_->setExpressionSink([this](const char* face) {
+            SetAvatarExpressionIfActive(face);
+        });
+        head_->setGreetingSpeechSink([](const char* line) {
+            // No on-device TTS in this firmware. The line is logged so the
+            // greeting's timing is observable on the serial console.
+            ESP_LOGI(TAG, "attention: greeting would say \"%s\"", line);
+        });
+
+        ESP_LOGI(TAG, "attention: built, not started (arm with the set_attention MCP tool)");
+    }
+
+    // Start autonomous control: neutral, self-test, greeting, then tracking.
+    bool ArmAttention(bool on) {
+        if (head_ == nullptr) return false;
+        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (on && !attention_armed_) {
+            head_->begin(now);
+            attention_armed_ = true;
+            ESP_LOGI(TAG, "attention: ARMED — self-test starting");
+        } else if (!on && attention_armed_) {
+            head_->setTrackingEnabled(false);
+            head_->setBehavior(attention::Behavior::IDLE, now);
+            attention_armed_ = false;
+            ESP_LOGI(TAG, "attention: disarmed, head released");
+        }
+        return true;
     }
 
     void InitializeServo() {
@@ -4225,6 +4341,11 @@ private:
             motion_driver_->Tick();
             MaybeAutoReleaseTorque();
             ServoWobbleStepAdvance();
+            // Non-blocking, internally rate-limited per stage, and a no-op
+            // until something has armed it. It never calls delay().
+            if (head_ != nullptr && attention_armed_) {
+                head_->update((uint32_t)(esp_timer_get_time() / 1000));
+            }
             taskYIELD();
         }
     }
@@ -5677,6 +5798,113 @@ private:
                 return root;
             });
 
+        // --- autonomous head control --------------------------------------
+        mcp_server.AddTool(
+            "self.robot.set_attention",
+            "Arm or disarm autonomous head control. Arming runs a slow bounded "
+            "servo self-test (about 11 s, +/-10 deg yaw and +/-5 deg pitch), "
+            "then a short greeting, then enables face tracking. Nothing moves "
+            "on its own until this is called. Disarming releases the head "
+            "immediately and leaves it wherever it is. set_head_angles also "
+            "disarms: a remote command wins over autonomy.",
+            PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+            [this](const PropertyList& properties) -> ReturnValue {
+                const bool enabled = properties["enabled"].value<bool>();
+                const bool ok = ArmAttention(enabled);
+                cJSON* root = cJSON_CreateObject();
+                cJSON_AddBoolToObject(root, "ok", ok);
+                cJSON_AddBoolToObject(root, "armed", attention_armed_);
+                if (!ok) {
+                    cJSON_AddStringToObject(root, "reason",
+                        head_ == nullptr ? "head controller unavailable (servo init failed)"
+                                         : "unknown");
+                }
+                return root;
+            });
+
+        mcp_server.AddTool(
+            "self.robot.get_attention",
+            "Report autonomous head control state: whether it is armed, how "
+            "the servo self-test went, what the tracker can see, what the "
+            "safety filter has intercepted, and what the face is doing. The "
+            "counters are the point: a tracker that silently never sees anyone "
+            "looks exactly like an empty room unless something is counting.",
+            PropertyList(),
+            [this](const PropertyList&) -> ReturnValue {
+                cJSON* root = cJSON_CreateObject();
+                cJSON_AddBoolToObject(root, "available", head_ != nullptr);
+                cJSON_AddBoolToObject(root, "armed", attention_armed_);
+                if (head_ == nullptr) return root;
+
+                const attention::Diagnostics d = head_->diagnostics();
+                cJSON_AddStringToObject(root, "self_test",
+                                        attention::ToString(head_->selfTestState()));
+                cJSON_AddStringToObject(root, "behavior", attention::ToString(head_->behavior()));
+                cJSON_AddStringToObject(root, "tracking", attention::ToString(d.tracking));
+                cJSON_AddBoolToObject(root, "greeting", head_->greeting());
+                cJSON_AddBoolToObject(root, "face_visible", d.raw_target.visible);
+                cJSON_AddNumberToObject(root, "face_x", d.raw_target.x);
+                cJSON_AddNumberToObject(root, "face_y", d.raw_target.y);
+                cJSON_AddNumberToObject(root, "yaw_deg", d.issued.yaw_deg);
+                cJSON_AddNumberToObject(root, "pitch_deg", d.issued.pitch_deg);
+                cJSON_AddNumberToObject(root, "safety_rejected", d.safety_rejected);
+                cJSON_AddNumberToObject(root, "safety_clamped", d.safety_clamped);
+                cJSON_AddBoolToObject(root, "emergency_stopped", d.emergency_stopped);
+                cJSON_AddStringToObject(root, "face", attention::ToString(d.face));
+                cJSON_AddStringToObject(root, "affect", attention::ToString(d.affect));
+
+#ifdef CONFIG_STACKCHAN_FACE_DETECT
+                if (face_tracker_ != nullptr) {
+                    const attention::EspDlFaceTracker::Stats st = face_tracker_->stats();
+                    cJSON* det = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(det, "frames", st.frames);
+                    cJSON_AddNumberToObject(det, "detections", st.detections);
+                    cJSON_AddNumberToObject(det, "no_frame", st.no_frame);
+                    cJSON_AddNumberToObject(det, "bad_format", st.bad_format);
+                    cJSON_AddNumberToObject(det, "last_latency_ms", st.last_latency_ms);
+                    cJSON_AddItemToObject(root, "detector", det);
+                } else {
+                    cJSON_AddNullToObject(root, "detector");
+                }
+#else
+                // Not a failure to report — the build simply has no detector.
+                cJSON_AddNullToObject(root, "detector");
+#endif
+                return root;
+            });
+
+        mcp_server.AddTool(
+            "self.robot.observe_affect",
+            "Tell the robot what the person it is talking to sounds like, so "
+            "its face can answer. label is one of the pipeline's seven: anger, "
+            "disgust, fear, happy, neutral, sad, surprise. confidence is 0..1. "
+            "The robot does not mirror indiscriminately — anger is answered "
+            "with a thoughtful face, not an angry one.",
+            PropertyList({Property("label", kPropertyTypeString),
+                          Property("confidence", kPropertyTypeInteger, 0, 0, 100)}),
+            [this](const PropertyList& properties) -> ReturnValue {
+                cJSON* root = cJSON_CreateObject();
+                if (head_ == nullptr) {
+                    cJSON_AddBoolToObject(root, "ok", false);
+                    cJSON_AddStringToObject(root, "reason", "head controller unavailable");
+                    return root;
+                }
+                const std::string label = properties["label"].value<std::string>();
+                const int pct = properties["confidence"].value<int>();
+                const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+                head_->observeAffect(label.c_str(), pct / 100.0f, now);
+
+                const attention::MimicStats st = head_->mimicStats();
+                cJSON_AddBoolToObject(root, "ok", true);
+                cJSON_AddStringToObject(root, "face", head_->mimicFace() == attention::AvatarFace::kIdle
+                                                          ? "idle"
+                                                          : attention::ToString(head_->mimicFace()));
+                cJSON_AddNumberToObject(root, "accepted", st.accepted);
+                cJSON_AddNumberToObject(root, "unknown", st.unknown);
+                cJSON_AddNumberToObject(root, "weak", st.weak);
+                return root;
+            });
+
         // Set head angles (yaw, pitch in degrees)
         // SCS0009: 1 step = 0.3125 degrees, so 1 degree = 3.2 steps (= 16/5)
         // yaw: -90..90 degrees (no hardware restriction). pitch: two-tier
@@ -5712,6 +5940,15 @@ private:
                 int yaw = properties["yaw"].value<int>();
                 int pitch = properties["pitch"].value<int>();
                 int speed_dps = properties["speed_dps"].value<int>();
+                // A remote command wins over autonomy. Without this the face
+                // tracker would steer straight back on its next tick and the
+                // caller's move would look like it had been ignored — two
+                // writers to one head, which is the failure the attention
+                // layer's single-door rule exists to prevent.
+                if (attention_armed_) {
+                    ESP_LOGI(TAG, "set_head_angles: disarming attention (remote command wins)");
+                    ArmAttention(false);
+                }
                 // Issue #80 / #98: two-tier pitch guard.
                 //
                 // Tier 1 (hard clamp): silently clamp to [SAFE_PITCH_MIN,
@@ -7374,6 +7611,7 @@ public:
         GetBacklight()->RestoreBrightness();
         InitializeIOExpander();
         InitializeServo();
+        InitializeAttention();
         InitializeTouchSettings();
         InitializeSi12tTouch();
         I2cDetect();

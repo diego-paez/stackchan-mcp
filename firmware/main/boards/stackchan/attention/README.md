@@ -14,11 +14,43 @@ Priority order, as specified: **safety > stability > smoothness > tracking speed
 | Servo safety filter incl. hostile-input rejection | written, tested |
 | Behaviour manager (IDLE / ATTEND_FACE / LOOK_CENTER / THINK / SLEEP) | written, tested |
 | Servo self-test | written, tested |
-| Board integration adapter | written, **not compiled** — see Assumptions |
-| Face detection | written, **not compiled** — esp-dl adapter + tested geometry |
+| Board integration adapter | wired into `StackChanBoard`, **compiles** (ESP-IDF v5.5.2) |
+| Face detection | compiles, **off by default** — `CONFIG_STACKCHAN_FACE_DETECT`, see Size |
 | Face mimic (what the screen does about the face) | written, 27 host tests passing |
 
-Nothing here has run on hardware.
+Nothing here has run on hardware. It does now build: `python scripts/release.py
+stackchan` under `espressif/idf:v5.5.2` produces a 2.92 MB app with 26% of the
+OTA partition free.
+
+## Arming
+
+Autonomous control is built at boot and **not started**. The head already has
+three writers — the `move_head` MCP tool, the touch wobble, and the boot
+sequence — and a fourth that starts unbidden on every power-up is what the
+one-door rule below forbids. Nothing moves until:
+
+    self.robot.set_attention(enabled=true)
+
+which runs the self-test, then the greeting, then enables tracking.
+`self.robot.get_attention` reports the counters; `self.robot.observe_affect`
+feeds the mimic. `set_head_angles` **disarms** — a remote command wins over
+autonomy, because otherwise the tracker steers back on its next tick and the
+caller's move looks ignored.
+
+## Size
+
+Face detection costs **1.76 MB** of app image: 2.92 MB without it, 4.68 MB
+with, against a 4032K OTA partition. That is why `CONFIG_STACKCHAN_FACE_DETECT`
+defaults to `n`. Turning it on needs one of:
+
+* `assets` shrunk from 8 M to ~6 M and both OTA slots grown to ~4992K;
+* a single OTA slot, which costs A/B updates;
+* the model weights moved into a partition of their own, which is what
+  esp-dl's loader is designed for and the only option that costs nothing else.
+
+Everything else — head control, the self-test, the greeting, the face mimic —
+fits comfortably and works without a detector. The head simply has nothing to
+follow, which the attention system already treats as an empty room.
 
 ## Data flow
 
@@ -179,11 +211,12 @@ The controllers are free of ESP-IDF so they can be tested where a mistake
 costs nothing:
 
     cd firmware
-    cmake -S host_test -B build/host_test
-    cmake --build build/host_test --target attention_safety_test
-    ./build/host_test/attention_safety_test
+    cmake -S host_test -B build_host/host_test
+    cmake --build build_host/host_test
+    (cd build_host/host_test && ctest)
 
-    cmake --build build/host_test && (cd build/host_test && ctest)
+`build_host/`, not `build/`: ESP-IDF owns `firmware/build/` and `release.py`
+refuses to run when something else has been there first.
 
 40 ctest entries. `attention_safety_test` is the servo chain; `face_mimic_test`
 is the screen. The ones that matter:
@@ -298,11 +331,23 @@ Stated explicitly, because several are unverified.
    entry point**, and it already owns the motion mutex, torque state and boot
    sequence. The adapter supplies a duration derived from distance and the
    approved speed; it never re-plans the motion.
-6. **Not compiled against ESP-IDF.** No `idf.py` and no `IDF_PATH` on the
-   machine this was written on, so the adapter and the `ESP_LOGx` path are
-   unverified. The controllers and their tests are verified, on the host.
-7. **Face detection is written but never compiled.** `espdl_face_tracker`
-   targets `espressif/human_face_detect` ^0.2.0, which pulls
+6. ~~**Not compiled against ESP-IDF.**~~ **Settled.** Built with
+   `espressif/idf:v5.5.2` in Docker. Three things only a real compiler found:
+   `attention::` does not resolve from global scope (`StackChanBoard` is not in
+   namespace `stackchan`), `-Werror=reorder` on `HeadController`'s init list,
+   and the RGB565 endianness split above. The host build enables none of these
+   warnings, which is worth remembering before trusting it alone.
+7. **Face detection compiles, and the version pairing is load-bearing.**
+   `human_face_detect` 0.2.3 asks for esp-dl `^3.1.3`; the resolver honours
+   that with 3.3.0, and the component then does not compile against it —
+   `DL_IMAGE_CAP_RGB_SWAP` gone, `MSRPostprocessor`'s constructor arity
+   changed, `MNPPostprocessor::set_resize_scale_x` gone, `MSRMNP` left
+   abstract. esp-dl made breaking changes inside its own caret range. The
+   manifest now pins `^0.5.0`, whose versions ask for `~3.3.0`. Loosening it
+   reintroduces the breakage.
+
+   Historical note: `espdl_face_tracker`
+   targeted `espressif/human_face_detect` ^0.2.0, which pulls
    `espressif/esp-dl` ^3.0.0 and is declared in `main/idf_component.yml` for
    esp32s3 and esp32p4. The API was read from the published component rather
    than guessed: `HumanFaceDetect::run(const dl::image::img_t&)` returning
@@ -318,14 +363,24 @@ Stated explicitly, because several are unverified.
    and esp32p4, which is why the dependency is gated.
 
 
-8. **The camera's pixel format is not known in advance.** `EspVideo`
-   negotiates with the sensor at runtime and prefers YUV422P, then RGB565,
-   then RGB24 — so what arrives is a property of the camera module. esp-dl
-   reads RGB565, RGB888 and GRAY. If the sensor settles on YUV the tracker
-   logs once and reports nobody, rather than reinterpreting the bytes, which
-   would produce confident detections of faces that are not there. The fix is
-   either to force RGB565 in the format negotiation or to convert with
-   `esp_imgfx_color_convert`, which this firmware already links.
+8. ~~**The camera's pixel format is not known in advance.**~~ **Settled.**
+   The board pins the sensor to YUV422
+   (`CONFIG_CAMERA_GC0308_DVP_YUV422_320X240_20FPS` in `config.json`), so it
+   was not unknown — it was configured to the one family esp-dl 3.1 could not
+   read, and face tracking would have reported an empty room forever.
+
+   No sensor change was needed in the end. esp-dl 3.3 gained a real
+   `DL_IMAGE_PIX_TYPE_YUYV` with genuine conversions behind it
+   (`DL_IMAGE_PIX_CVT_YUYV2RGB888`), and `esp_video.cc:194` records that what
+   this stack labels YUV422P is byte-wise packed YUYV. So `MapPixelFormat()`
+   now declares the true format rather than reinterpreting bytes — the
+   opposite of the mistake the file warns about, because the preprocessor
+   converts properly instead of the model reading luma as red. The photo path
+   keeps the format it was tuned for.
+
+   One trap remains, recorded because it is invisible: esp-dl 3.3 split RGB565
+   by endianness. `V4L2_PIX_FMT_RGB565` is `RGB565LE`. Choosing `BE` would not
+   fail — it would swap red and blue on every frame and quietly cost accuracy.
 
 9. **"Up" is the positive pitch direction.** `AttentionController` documents
    image y as growing downward while pitch grows upward, and defaults
