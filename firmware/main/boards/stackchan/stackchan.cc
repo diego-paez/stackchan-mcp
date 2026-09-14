@@ -3093,8 +3093,11 @@ private:
             attention::FaceTrackerConfig cfg;
             auto tracker = std::make_unique<attention::EspDlFaceTracker>(camera_, cfg);
             if (tracker->begin()) {
-                ESP_LOGI(TAG, "attention: face detection running at %u ms",
-                         (unsigned)cfg.detect_period_ms);
+                // Built, loaded, and deliberately asleep. set_attention with
+                // follow_faces=true is what wakes it.
+                tracker->setActive(false);
+                ESP_LOGI(TAG, "attention: face detection ready, idle until "
+                              "set_attention(follow_faces=true)");
                 face_tracker_ = std::move(tracker);
             } else {
                 ESP_LOGW(TAG, "attention: face detection unavailable, head will not track");
@@ -5906,6 +5909,16 @@ private:
                 const bool enabled = properties["enabled"].value<bool>();
                 const bool follow = properties["follow_faces"].value<bool>();
                 if (head_ != nullptr) head_->setFollowFaces(follow);
+                // The detector idles unless the head is going to act on it.
+                // Running it anyway costs the microphone: the capture,
+                // colour conversion and two models compete for the same
+                // PSRAM the audio path needs, and the symptom is whole words
+                // missing from the middle of what the robot heard.
+#ifdef CONFIG_STACKCHAN_FACE_DETECT
+                if (face_tracker_ != nullptr) {
+                    face_tracker_->setActive(enabled && follow);
+                }
+#endif
                 const bool ok = ArmAttention(enabled);
                 cJSON* root = cJSON_CreateObject();
                 cJSON_AddBoolToObject(root, "ok", ok);
@@ -5966,6 +5979,7 @@ private:
                 if (face_tracker_ != nullptr) {
                     const attention::EspDlFaceTracker::Stats st = face_tracker_->stats();
                     cJSON* det = cJSON_CreateObject();
+                    cJSON_AddBoolToObject(det, "active", face_tracker_->active());
                     cJSON_AddNumberToObject(det, "frames", st.frames);
                     cJSON_AddNumberToObject(det, "detections", st.detections);
                     cJSON_AddNumberToObject(det, "no_frame", st.no_frame);

@@ -164,7 +164,8 @@ bool EspDlFaceTracker::begin() {
         detector_.reset();
         return false;
     }
-    ESP_LOGI(TAG, "face tracking started: every %ums, min score %.2f",
+    ESP_LOGI(TAG, "face tracking ready (idle): every %ums when active, "
+                  "min score %.2f",
              (unsigned)cfg_.detect_period_ms, cfg_.min_score);
     return true;
 }
@@ -176,6 +177,12 @@ void EspDlFaceTracker::TaskEntry(void* self) {
 
 void EspDlFaceTracker::Run() {
     while (running_) {
+        if (!active_) {
+            // Idle. Nothing captured, nothing converted, nothing inferred —
+            // the microphone gets the memory bandwidth back. See setActive().
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
         const uint32_t started = esp_timer_get_time() / 1000;
         DetectOnce(started);
         const uint32_t spent = (esp_timer_get_time() / 1000) - started;

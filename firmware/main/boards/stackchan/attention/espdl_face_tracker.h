@@ -122,9 +122,25 @@ public:
     };
     Stats stats() const;
 
+    // Run, or stop running, without tearing the task down.
+    //
+    // The detector is NOT free when nobody is asking it anything. Each pass
+    // captures a frame, converts 150 KB of YUYV into 230 KB of RGB888 and
+    // runs two models, and all of that competes for the same PSRAM bandwidth
+    // the audio path needs — on a device whose microphone is the point. Left
+    // running while the head was not even following it, it cost dropped Opus
+    // frames: whole words missing from the middle of what the robot heard.
+    //
+    // So it idles by default and is woken only when something wants to see.
+    // Paused, the loop does nothing but sleep: no capture, no conversion, no
+    // inference, no PSRAM traffic.
+    void setActive(bool on) { active_ = on; }
+    bool active() const { return active_; }
+
 private:
     // The frame is copied here before inference so the camera can be handed
     // straight back. Allocated once, in PSRAM, and reused.
+    volatile bool active_ = false;   // see setActive()
     uint8_t* scratch_ = nullptr;
     size_t scratch_size_ = 0;
 
