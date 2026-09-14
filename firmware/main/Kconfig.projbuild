@@ -119,13 +119,21 @@ config STACKCHAN_FACE_DETECT
         When enabled, the head can find and follow a face by itself using
         espressif/human_face_detect on the camera feed.
 
-        Default DISABLED, and the reason is size rather than taste. The model
-        weights push the app image to about 4.68 MB against a 4032K OTA
-        partition — an overflow of roughly 760 KB — so enabling this also
-        requires a partition layout with room for it, or moving the weights
-        into a partition of their own. Head control, the greeting and the face
-        mimic all work without it; the head simply has nothing to follow, which
-        the attention system already treats as an empty room.
+        Default DISABLED because it does not fit in the stock partition
+        table: the app grows past 4032K and the build fails at link. The
+        board's own table, partitions/v2/16m_stackchan.csv, moves 2048K per
+        app slot over from the asset store and has room; config.json selects
+        it and turns this on, so BOARD_TYPE_STACKCHAN builds get detection
+        and nothing else has to change.
+
+        What costs the space is esp-dl's operator library, NOT the weights —
+        those are 191K (msr 61K + mnp 130K). Moving the model into a
+        partition of its own is therefore not a fix for the overflow; only a
+        bigger app partition is.
+
+        Head control, the greeting and the face mimic all work without this;
+        the head simply has nothing to follow, which the attention system
+        already treats as an empty room.
 
 config STACKCHAN_MDNS_DISCOVERY
     bool "Discover stackchan-mcp gateway with mDNS"

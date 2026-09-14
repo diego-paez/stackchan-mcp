@@ -251,8 +251,14 @@ void HeadController::update(uint32_t now_ms) {
     if ((now_ms - last_attention_ms_) >= schedule_.attention_period_ms) {
         const float dt = (now_ms - last_attention_ms_) / 1000.0f;
         last_attention_ms_ = now_ms;
-        const FaceTarget t = vision_.getTarget();
-        diag_.raw_target = t;
+        FaceTarget t = vision_.getTarget();
+        diag_.raw_target = t;   // report what the detector said, always
+        if (!follow_faces_) {
+            // Seen but not acted on. The detector is reported through
+            // diagnostics either way, so its behaviour stays observable
+            // while the head declines to chase it. See setFollowFaces().
+            t = FaceTarget{};
+        }
         attention_.update(t, now_ms, dt);
         scan_.observeFace(t.visible, now_ms);
         scan_.update(now_ms);

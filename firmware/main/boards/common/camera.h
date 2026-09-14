@@ -40,6 +40,26 @@ public:
     // detection, which otherwise has no way to see what the camera sees:
     // Capture() and Explain() between them only ever send the image away.
     virtual bool PeekFrame(CameraFrame* out) { return false; }
+
+    // Borrow a FRESH frame for something running on the device, and keep it
+    // still until EndFrame().
+    //
+    // PeekFrame alone is not enough and the difference cost a bring-up: it
+    // lends whatever Capture() last produced, and on a board where Capture()
+    // only runs when someone asks for a photo, that is nothing at all. A
+    // detector polling PeekFrame sees an empty camera forever and reports it
+    // as "no frame", which looks exactly like a broken sensor.
+    //
+    // The pair also carries the lifetime. `out->data` points into the
+    // driver's buffer, and the photo path frees and reallocates that buffer
+    // on its own thread; without a window in which the frame is guaranteed
+    // to stand still, a photo taken during inference is a use-after-free.
+    // Every BeginFrame that returns true must be matched by EndFrame.
+    //
+    // Default false, so a board that cannot lend pixels is unchanged.
+    virtual bool BeginFrame(CameraFrame* out) { return false; }
+    virtual void EndFrame() {}
+
     virtual std::string Explain(const std::string& question) = 0;
 };
 

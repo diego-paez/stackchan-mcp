@@ -101,6 +101,12 @@ public:
     void setBehavior(Behavior b, uint32_t now_ms) { behavior_.setBehavior(b, now_ms); }
     Behavior behavior() const { return behavior_.current(); }
     void setTrackingEnabled(bool on);
+
+    // Let a detection move the head. Off by default; see follow_faces_ for
+    // the measurements behind that. Turning it on is how you judge a
+    // detector you have just changed, without reflashing to find out.
+    void setFollowFaces(bool on) { follow_faces_ = on; }
+    bool followFaces() const { return follow_faces_; }
     void emergencyStop();
     void clearEmergencyStop(uint32_t now_ms);
     bool emergencyStopped() const { return safety_.emergencyStopped(); }
@@ -183,6 +189,21 @@ private:
     void updateMimic(uint32_t now_ms);
 
     VisionTracker& vision_;
+    // Whether a detection is allowed to move the head. Default OFF, and the
+    // reason is measured rather than cautious: on this camera the shipped
+    // esp-dl face detector reports five to six boxes at 0.86-0.998 on every
+    // scene it is shown — blank wall, ceiling, a lit window — with the chosen
+    // box pinned to x1=0 and about 53px wide every time. The frames reaching
+    // it are live and correctly formatted (mean brightness tracks the scene,
+    // 320x240 YUYV, 153600 bytes), and the result does not change if they are
+    // converted to RGB888 first, if the buffer is 16-byte aligned for the
+    // vector unit, or if the other model in the component is used instead.
+    //
+    // Following that makes the robot chase phantoms, which is worse than a
+    // robot that does not track at all. So the detector runs, and its output
+    // is in diagnostics where it can be judged, and the head ignores it until
+    // somebody turns this on.
+    bool follow_faces_ = false;
     ServoSink& sink_;
 
     ServoSafetyController safety_;

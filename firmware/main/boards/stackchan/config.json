@@ -9,7 +9,11 @@
                 "CONFIG_CAMERA_GC0308_AUTO_DETECT_DVP_INTERFACE_SENSOR=y",
                 "CONFIG_CAMERA_GC0308_DVP_YUV422_320X240_20FPS=y",
                 "CONFIG_STACKCHAN_SERVO_FEETECH=y",
-                "CONFIG_STACKCHAN_VECTOR_FACE=y"
+                "CONFIG_STACKCHAN_VECTOR_FACE=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_stackchan.csv\"",
+                "CONFIG_STACKCHAN_FACE_DETECT=y",
+                "CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=n",
+                "CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y"
             ]
         }
     ]

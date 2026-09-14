@@ -2,6 +2,7 @@
 #include "sdkconfig.h"
 
 #include <lvgl.h>
+#include <mutex>
 #include <thread>
 #include <memory>
 #include <vector>
@@ -40,6 +41,12 @@ private:
     std::string explain_token_;
     std::thread encoder_thread_;
 
+    // Guards frame_ and the capture sequence. Recursive because BeginFrame()
+    // takes it and then calls Capture(), which takes it again: the photo path
+    // must be able to lock on its own, and the detector must be able to hold
+    // the frame across an inference that outlives the capture.
+    std::recursive_mutex frame_mutex_;
+
 public:
     EspVideo(const esp_video_init_config_t& config);
     ~EspVideo();
@@ -54,4 +61,8 @@ public:
     // Lend the last captured frame to an on-device consumer. See
     // Camera::PeekFrame. Returns false until Capture() has produced one.
     virtual bool PeekFrame(CameraFrame* out) override;
+
+    // Capture one and hold it still until EndFrame(). See Camera::BeginFrame.
+    virtual bool BeginFrame(CameraFrame* out) override;
+    virtual void EndFrame() override;
 };

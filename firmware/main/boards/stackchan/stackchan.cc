@@ -5894,14 +5894,24 @@ private:
             "then a short greeting, then enables face tracking. Nothing moves "
             "on its own until this is called. Disarming releases the head "
             "immediately and leaves it wherever it is. set_head_angles also "
-            "disarms: a remote command wins over autonomy.",
-            PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+            "disarms: a remote command wins over autonomy. "
+            "follow_faces (default false) decides whether a detection may "
+            "move the head. It is off because the shipped detector is not "
+            "yet trustworthy on this camera: it reports faces on blank wall. "
+            "Detections appear in get_attention either way, so turn this on "
+            "to judge a detector, not to rely on one.",
+            PropertyList({Property("enabled", kPropertyTypeBoolean),
+                          Property("follow_faces", kPropertyTypeBoolean, false)}),
             [this](const PropertyList& properties) -> ReturnValue {
                 const bool enabled = properties["enabled"].value<bool>();
+                const bool follow = properties["follow_faces"].value<bool>();
+                if (head_ != nullptr) head_->setFollowFaces(follow);
                 const bool ok = ArmAttention(enabled);
                 cJSON* root = cJSON_CreateObject();
                 cJSON_AddBoolToObject(root, "ok", ok);
                 cJSON_AddBoolToObject(root, "armed", attention_armed_);
+                cJSON_AddBoolToObject(root, "follow_faces",
+                                      head_ != nullptr && head_->followFaces());
                 if (!ok) {
                     cJSON_AddStringToObject(root, "reason",
                         head_ == nullptr ? "head controller unavailable (servo init failed)"
@@ -5961,6 +5971,20 @@ private:
                     cJSON_AddNumberToObject(det, "no_frame", st.no_frame);
                     cJSON_AddNumberToObject(det, "bad_format", st.bad_format);
                     cJSON_AddNumberToObject(det, "last_latency_ms", st.last_latency_ms);
+                    cJSON_AddNumberToObject(det, "width", st.width);
+                    cJSON_AddNumberToObject(det, "height", st.height);
+                    cJSON_AddNumberToObject(det, "bytes", st.bytes);
+                    char fcc[5] = {(char)(st.fourcc & 0xFF), (char)((st.fourcc >> 8) & 0xFF),
+                                   (char)((st.fourcc >> 16) & 0xFF), (char)((st.fourcc >> 24) & 0xFF), 0};
+                    cJSON_AddStringToObject(det, "fourcc", st.fourcc ? fcc : "");
+                    cJSON_AddNumberToObject(det, "raw_boxes", st.raw_boxes);
+                    cJSON_AddNumberToObject(det, "kept_boxes", st.kept_boxes);
+                    cJSON_AddNumberToObject(det, "best_score", st.best_score);
+                    cJSON_AddNumberToObject(det, "mean_luma", st.mean_luma);
+                    cJSON_AddNumberToObject(det, "box_x1", st.box_x1);
+                    cJSON_AddNumberToObject(det, "box_y1", st.box_y1);
+                    cJSON_AddNumberToObject(det, "box_x2", st.box_x2);
+                    cJSON_AddNumberToObject(det, "box_y2", st.box_y2);
                     cJSON_AddItemToObject(root, "detector", det);
                 } else {
                     cJSON_AddNullToObject(root, "detector");

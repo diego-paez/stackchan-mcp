@@ -1088,6 +1088,10 @@ async def _dispatch_mcp_tool(
             "self.robot.set_idle_search",
             arguments,
         ),
+        "tune_idle_search": (
+            "self.robot.tune_idle_search",
+            arguments,
+        ),
         "observe_affect": (
             "self.robot.observe_affect",
             arguments,
@@ -1806,6 +1810,34 @@ def create_server(notify_config: NotifyConfig | None = None) -> StackChanServer:
                         "enabled": {"type": "boolean"},
                     },
                     "required": ["enabled"],
+                },
+            ),
+            Tool(
+                name="tune_idle_search",
+                description=(
+                    "Change how the idle search sweeps, without reflashing. "
+                    "dwell_ms is how long the head waits at each station "
+                    "before moving on — raise it if the robot reads as "
+                    "restless. yaw_deg is how far left and right it looks. "
+                    "pitch_lift_deg raises (or, negative, lowers) the gaze "
+                    "relative to resting pitch; a robot on a low stand wants "
+                    "0 or less so it looks at a face rather than the ceiling. "
+                    "0 leaves a value unchanged, except pitch_lift_deg which "
+                    "is always applied. Returns the settings now in force."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "dwell_ms": {
+                            "type": "integer", "minimum": 0, "maximum": 60000,
+                        },
+                        "yaw_deg": {
+                            "type": "integer", "minimum": 0, "maximum": 30,
+                        },
+                        "pitch_lift_deg": {
+                            "type": "integer", "minimum": -30, "maximum": 30,
+                        },
+                    },
                 },
             ),
             Tool(

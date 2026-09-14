@@ -1,0 +1,20 @@
+# ESP-IDF Partition Table — Stack-chan, 16MB
+#
+# Same as partitions/v2/16m.csv except for where the space goes. The stock
+# table gives each OTA slot 4032K and the asset store 8M; this board's assets
+# are 1.5M, and its app does not fit in 4032K once on-device face detection
+# is compiled in (esp-dl's operator library, not the weights — those are
+# 191K).
+#
+# So: 2048K moves from the asset store to each app slot. nvs, otadata,
+# phy_init and ota_0 keep their stock offsets, which means a device already
+# flashed keeps its Wi-Fi credentials and gateway token across this change.
+# ota_1 and assets move, and both are rewritten by a full flash anyway.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,    0x4000,
+otadata,  data, ota,     0xd000,    0x2000,
+phy_init, data, phy,     0xf000,    0x1000,
+ota_0,    app,  ota_0,   0x20000,   0x5f0000,
+ota_1,    app,  ota_1,   ,          0x5f0000,
+assets,   data, spiffs,  0xc00000,  4M

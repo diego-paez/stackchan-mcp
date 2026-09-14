@@ -22,6 +22,16 @@
 // update(). It was written for exactly this.
 #pragma once
 
+// sdkconfig.h first, and deliberately: ESP-IDF does not force-include it, so
+// a CONFIG_ macro tested before something else happens to pull it in reads as
+// undefined. This file is guarded on CONFIG_STACKCHAN_FACE_DETECT on its very
+// first line, which made the whole tracker compile to nothing however the
+// option was set — the link then failed on symbols the source plainly
+// defines. The one include below is what makes the guard mean anything.
+#ifdef ESP_PLATFORM
+#include <sdkconfig.h>
+#endif
+
 #if defined(ESP_PLATFORM) && defined(CONFIG_STACKCHAN_FACE_DETECT)
 
 #include <freertos/FreeRTOS.h>
@@ -88,10 +98,36 @@ public:
         uint32_t no_frame = 0;       // camera had nothing to lend
         uint32_t bad_format = 0;     // pixel format the model cannot read
         uint32_t last_latency_ms = 0;
+
+        // What the last frame actually was, and what the model made of it.
+        // Here because the alternative is reading one-shot serial logs to
+        // answer "is it seeing a face or is it seeing noise" — and the
+        // difference is visible in these numbers: a real face gives a handful
+        // of raw boxes, a misread buffer gives dozens, and the geometry says
+        // whether the bytes were even the right shape.
+        uint16_t width = 0;
+        uint16_t height = 0;
+        uint32_t bytes = 0;          // frame length as the driver reported it
+        uint32_t fourcc = 0;
+        uint16_t raw_boxes = 0;      // candidates before the score gate
+        uint16_t kept_boxes = 0;     // candidates after it
+        float best_score = 0.0f;
+
+        // Mean brightness of the buffer handed to the model, and the box it
+        // liked best, in pixels. Between them these answer the question the
+        // score cannot: is the detector looking at the room at all, and does
+        // what it finds move when the room does.
+        uint8_t mean_luma = 0;
+        int16_t box_x1 = 0, box_y1 = 0, box_x2 = 0, box_y2 = 0;
     };
     Stats stats() const;
 
 private:
+    // The frame is copied here before inference so the camera can be handed
+    // straight back. Allocated once, in PSRAM, and reused.
+    uint8_t* scratch_ = nullptr;
+    size_t scratch_size_ = 0;
+
     static void TaskEntry(void* self);
     void Run();
     bool DetectOnce(uint32_t now_ms);

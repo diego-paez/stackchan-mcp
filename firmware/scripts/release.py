@@ -442,6 +442,27 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
             f.write("# Append by release.py\n")
             for append in sdkconfig_append:
                 f.write(f"{append}\n")
+
+        # A dependency gated on `$CONFIG{...}` in idf_component.yml needs two
+        # things the moment above does not provide: the option set in
+        # sdkconfig (done, just now) AND Kconfig metadata in the build
+        # directory for the solver to read it through. `set-target` wipes the
+        # second, so the solve it ran a moment ago evaluated every such rule
+        # against an option it could not see, and the lock it wrote says the
+        # component is not needed. Reusing that lock is silent: the component
+        # is never downloaded, and the link fails on undefined references to
+        # code that is plainly there in the source.
+        #
+        # One reconfigure rebuilds the Kconfig metadata from the sdkconfig we
+        # have just finished writing; dropping the lock then forces a solve
+        # that can actually see it. Both are needed — either alone leaves the
+        # component out.
+        if os.system("idf.py reconfigure") != 0:
+            print("reconfigure failed", file=sys.stderr)
+            sys.exit(1)
+        lock = Path("dependencies.lock")
+        if lock.exists():
+            lock.unlink()
         # Build with macro BOARD_NAME defined to name
         if os.system(f"idf.py -DBOARD_NAME={name} -DBOARD_TYPE={board_type} build") != 0:
             print("build failed")

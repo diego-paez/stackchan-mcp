@@ -386,6 +386,10 @@ void EspVideo::SetExplainUrl(const std::string& url, const std::string& token) {
 }
 
 bool EspVideo::Capture() {
+    // frame_ is freed and reallocated below. A detector holding a borrowed
+    // view of it (BeginFrame) must not have it pulled out mid-inference.
+    std::lock_guard<std::recursive_mutex> held(frame_mutex_);
+
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -420,10 +424,10 @@ bool EspVideo::Capture() {
             }
 
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
+            ESP_LOGD(TAG, "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
                      mmap_buffers_[buf.index].length, sensor_width_, sensor_height_);
 #else
-            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
+            ESP_LOGD(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
                      mmap_buffers_[buf.index].length, frame_.width, frame_.height);
 #endif  // CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
             ESP_LOG_BUFFER_HEXDUMP(TAG, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, 256),
@@ -1041,6 +1045,7 @@ std::string EspVideo::Explain(const std::string& question) {
 }
 
 bool EspVideo::PeekFrame(CameraFrame* out) {
+    std::lock_guard<std::recursive_mutex> held(frame_mutex_);
     if (out == nullptr) {
         return false;
     }
@@ -1058,4 +1063,21 @@ bool EspVideo::PeekFrame(CameraFrame* out) {
     out->height = frame_.height;
     out->fourcc = static_cast<uint32_t>(frame_.format);
     return true;
+}
+
+bool EspVideo::BeginFrame(CameraFrame* out) {
+    // Take the lock FIRST and keep it: Capture() reallocates frame_, and the
+    // caller is about to run a neural network over the bytes it returns. The
+    // photo path blocks for the length of that inference, which on this
+    // sensor is tens of milliseconds and nobody can see.
+    frame_mutex_.lock();
+    if (!Capture() || !PeekFrame(out)) {
+        frame_mutex_.unlock();
+        return false;
+    }
+    return true;
+}
+
+void EspVideo::EndFrame() {
+    frame_mutex_.unlock();
 }
