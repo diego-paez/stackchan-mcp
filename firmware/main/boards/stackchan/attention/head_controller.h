@@ -22,6 +22,7 @@
 #include "behavior_manager.h"
 #include "face_mimic.h"
 #include "greeting_routine.h"
+#include "idle_scan.h"
 #include "motion_controller.h"
 #include "motion_mixer.h"
 #include "servo_safety_controller.h"
@@ -67,6 +68,7 @@ struct Diagnostics {
     uint32_t safety_clamped = 0;
     AvatarFace face = AvatarFace::kIdle;
     Affect affect = Affect::kUnknown;
+    ScanState scan = ScanState::kOff;
 };
 
 class HeadController {
@@ -95,6 +97,21 @@ public:
     Diagnostics diagnostics() const { return diag_; }
 
     using ExpressionFn = GreetingRoutine::ExpressionFn;
+
+    // --- looking for somebody ---------------------------------------------
+    // With nobody in front of it the head sweeps a few stations, pausing long
+    // enough at each for the detector to get clean frames. A voice interrupts
+    // the sweep and centres the head — there is no direction of arrival to
+    // turn toward, so centre is the honest guess. A face hands the head to
+    // the tracker and this stops having an opinion. See idle_scan.h.
+    void setIdleScanEnabled(bool on, uint32_t now_ms) { scan_.setEnabled(on, now_ms); }
+    bool idleScanEnabled() const { return scan_.enabled(); }
+    ScanState scanState() const { return scan_.state(); }
+    ScanStats scanStats() const { return scan_.stats(); }
+    void setIdleScanConfig(const IdleScanConfig& cfg) { scan_.setConfig(cfg); }
+
+    // The board already knows this from Application::IsVoiceDetected().
+    void observeVoice(bool speaking, uint32_t now_ms) { scan_.observeVoice(speaking, now_ms); }
 
     // --- the face ---------------------------------------------------------
     // One sink, shared by the greeting and the mimic, for the same reason
@@ -173,6 +190,7 @@ private:
     GreetingRoutine greeting_;
     bool greeting_enabled_ = true;
 
+    IdleScan scan_;
     FaceMimic mimic_;
     ExpressionFn expression_;
     uint32_t last_mimic_ms_ = 0;

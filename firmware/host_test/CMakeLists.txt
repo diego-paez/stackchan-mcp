@@ -68,6 +68,7 @@ add_executable(attention_safety_test
     ../main/boards/stackchan/attention/head_controller.cc
     ../main/boards/stackchan/attention/greeting_routine.cc
     ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
 )
 
 target_include_directories(attention_safety_test
@@ -91,6 +92,7 @@ add_executable(sim_greeting
     ../main/boards/stackchan/attention/head_controller.cc
     ../main/boards/stackchan/attention/greeting_routine.cc
     ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
 )
 target_include_directories(sim_greeting PRIVATE ../main/boards/stackchan)
 
@@ -102,6 +104,7 @@ target_include_directories(sim_greeting PRIVATE ../main/boards/stackchan)
 add_executable(face_mimic_test
     test_face_mimic.cc
     ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
     ../main/boards/stackchan/attention/servo_safety_controller.cc
     ../main/boards/stackchan/attention/attention_controller.cc
     ../main/boards/stackchan/attention/motion_controller.cc
@@ -124,6 +127,7 @@ gtest_discover_tests(face_mimic_test)
 add_executable(sim_mimic
     sim_mimic.cc
     ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
     ../main/boards/stackchan/attention/servo_safety_controller.cc
     ../main/boards/stackchan/attention/attention_controller.cc
     ../main/boards/stackchan/attention/motion_controller.cc
@@ -133,3 +137,39 @@ add_executable(sim_mimic
     ../main/boards/stackchan/attention/greeting_routine.cc
 )
 target_include_directories(sim_mimic PRIVATE ../main/boards/stackchan)
+
+# --- idle search cycle ---------------------------------------------------
+# Looking around, reacting to a voice, settling on a face. See
+# main/boards/stackchan/attention/idle_scan.h.
+add_executable(idle_scan_test
+    test_idle_scan.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
+    ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/idle_scan.cc
+    ../main/boards/stackchan/attention/servo_safety_controller.cc
+    ../main/boards/stackchan/attention/attention_controller.cc
+    ../main/boards/stackchan/attention/motion_controller.cc
+    ../main/boards/stackchan/attention/behavior_manager.cc
+    ../main/boards/stackchan/attention/motion_mixer.cc
+    ../main/boards/stackchan/attention/head_controller.cc
+    ../main/boards/stackchan/attention/greeting_routine.cc
+)
+target_include_directories(idle_scan_test PRIVATE ../main/boards/stackchan)
+target_link_libraries(idle_scan_test PRIVATE GTest::gtest_main)
+gtest_discover_tests(idle_scan_test)
+
+# --- the drawn face -------------------------------------------------------
+# Geometry only: where the eyes and mouth go on a face that fills the panel.
+# Header-only, so there is no source to add beyond the test itself. See
+# main/boards/stackchan/avatar/face_layout.h.
+add_executable(face_layout_test
+    test_face_layout.cc
+)
+target_include_directories(face_layout_test PRIVATE ../main/boards/stackchan)
+target_link_libraries(face_layout_test PRIVATE GTest::gtest_main)
+gtest_discover_tests(face_layout_test)
+
+# Not a test — a picture you look at. Renders the same geometry and the same
+# mouth mask the panel draws, so the face can be judged without a robot.
+add_executable(sim_face sim_face.cc)
+target_include_directories(sim_face PRIVATE ../main/boards/stackchan)

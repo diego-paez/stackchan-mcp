@@ -871,6 +871,10 @@ if(CONFIG_BOARD_TYPE_STACKCHAN)
     # boards/stackchan/attention/README.md.
     file(GLOB STACKCHAN_ATTENTION_SOURCES ${STACKCHAN_BOARD_DIR}/attention/*.cc)
     list(APPEND BOARD_SOURCES ${STACKCHAN_ATTENTION_SOURCES})
+    # avatar/ — the drawn face. Same reason as attention/: the board glob is
+    # one level deep and would not see it.
+    file(GLOB STACKCHAN_AVATAR_SOURCES ${STACKCHAN_BOARD_DIR}/avatar/*.cc)
+    list(APPEND BOARD_SOURCES ${STACKCHAN_AVATAR_SOURCES})
     list(APPEND INCLUDE_DIRS ${STACKCHAN_BOARD_DIR})
 endif()
 list(APPEND SOURCES ${BOARD_SOURCES})

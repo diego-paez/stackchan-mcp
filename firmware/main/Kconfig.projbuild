@@ -93,6 +93,25 @@ config FORCE_DEFAULT_WEBSOCKET_URL
         Default disabled to preserve NVS-priority semantics for end users
         who configure the URL/token via runtime tooling.
 
+config STACKCHAN_VECTOR_FACE
+    bool "Draw the avatar face instead of showing bitmaps"
+    default y if BOARD_TYPE_STACKCHAN
+    default n
+    help
+        Draws the face with LVGL primitives at the panel's native resolution:
+        one flat colour over the whole screen, with eyes, brows and a mouth
+        sized as fractions of the display.
+
+        The bitmap path shows a 160x120 image upscaled 2x into the middle of
+        the 320x240 LCD, with the features drawn small inside it, and the
+        built-in set is placeholder stubs until a real one is uploaded from
+        the gateway. The drawn face is sharp at native resolution, spans about
+        80% of the width and 70% of the height, needs no PSRAM, and turns
+        expressions into parameters rather than 90 images (3.4 MB of RGB565
+        for what is geometrically a dozen numbers).
+
+        Disable to go back to the AvatarSet bitmap path.
+
 config STACKCHAN_FACE_DETECT
     bool "On-device face detection for the attention system"
     default n

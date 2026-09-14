@@ -64,6 +64,7 @@ static inline bool ServoWritePosOk(int r) { return r > 0; }
 #include "attention/board_servo_sink.h"
 #include "attention/espdl_face_tracker.h"
 #include "attention/head_controller.h"
+#include "avatar/lvgl_face.h"
 
 // StackChanBoard lives at global scope; the controllers live in
 // stackchan::attention. The alias keeps the wiring below readable without
@@ -654,6 +655,11 @@ private:
     // board's constructor completes. avatar_init_timer_ retries every 500 ms
     // until the screen is ready, then stops itself.
     lv_obj_t* avatar_img_ = nullptr;
+#ifdef CONFIG_STACKCHAN_VECTOR_FACE
+    // The face is computed and drawn rather than stored; see
+    // avatar/face_layout.h for the geometry and why it fills the panel.
+    stackchan::avatar::LvglFace vector_face_;
+#endif
     esp_timer_handle_t avatar_init_timer_ = nullptr;
     std::string current_avatar_face_ = "idle";
 
@@ -2904,6 +2910,7 @@ private:
 #endif
     std::unique_ptr<attention::HeadController> head_;
     bool attention_armed_ = false;
+    uint32_t last_keepalive_ms_ = 0;
     static constexpr uint8_t RGB_LED_COUNT = 12;  // StackChan base has 12 WS2812C
     static constexpr uint8_t RGB_DATA_PIN  = 13;  // PY32 expander pin (not ESP32 GPIO)
 
@@ -4328,6 +4335,31 @@ private:
         xSemaphoreGive(motion_mutex_);
     }
 
+    // The power-save timer shuts the board down through the PMIC after
+    // seconds_to_shutdown of "idle", and its idea of idle was only ever local
+    // interaction: a wake word, a touch, a button. A robot that is connected
+    // to its gateway, being driven over MCP, or watching a room by itself is
+    // not idle, and powering it off mid-session is a fault rather than a
+    // saving. Observed: connected, answering tool calls, powered off after
+    // five minutes, taking USB and the WebSocket with it.
+    //
+    // WakeUp() only resets a tick counter, so calling it often is cheap; once
+    // a second is plenty and keeps the servo task's inner loop clean.
+    void KeepAwakeIfBusy(uint32_t now_ms) {
+        if (power_save_timer_ == nullptr) return;
+        if ((now_ms - last_keepalive_ms_) < 1000) return;
+        last_keepalive_ms_ = now_ms;
+
+        const bool connected =
+            !Application::GetInstance().GetConnectedGatewayUrl().empty();
+        const bool watching = (head_ != nullptr && attention_armed_);
+        const bool moving = yaw_motion_.moving || pitch_motion_.moving;
+
+        if (connected || watching || moving) {
+            power_save_timer_->WakeUp();
+        }
+    }
+
     static void ServoTaskTrampoline(void* arg) {
         static_cast<StackChanBoard*>(arg)->ServoTaskMain();
     }
@@ -4341,11 +4373,18 @@ private:
             motion_driver_->Tick();
             MaybeAutoReleaseTorque();
             ServoWobbleStepAdvance();
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             // Non-blocking, internally rate-limited per stage, and a no-op
             // until something has armed it. It never calls delay().
             if (head_ != nullptr && attention_armed_) {
-                head_->update((uint32_t)(esp_timer_get_time() / 1000));
+                // The AFE gives a voice-activity boolean and no bearing, so
+                // this says "somebody is talking", never "somebody is over
+                // there". IdleScan treats it accordingly.
+                head_->observeVoice(Application::GetInstance().IsVoiceDetected(),
+                                    now_ms);
+                head_->update(now_ms);
             }
+            KeepAwakeIfBusy(now_ms);
             taskYIELD();
         }
     }
@@ -4642,7 +4681,50 @@ private:
     // Returns false if the requested image is unavailable (e.g. AvatarSet
     // loaded in matrix mode but the index triple is out of range, or the
     // avatar lv_obj cannot be created yet because the screen tree isn't up).
+#ifdef CONFIG_STACKCHAN_VECTOR_FACE
+    // eyes: 0 open / 1 half / 2 closed.  mouth: 0 closed / 1 half / 2 open /
+    // 3 'e' / 4 'u'. The vowel shapes differ in width on a real avatar; with
+    // a drawn mouth they differ in how far it opens, which is the part a
+    // viewer actually reads during speech.
+    static float BlinkFromEyesIndex(int eyes) {
+        switch (eyes) {
+            case 2: return 1.0f;
+            case 1: return 0.5f;
+            default: return 0.0f;
+        }
+    }
+    static float OpenFromMouthIndex(int mouth) {
+        switch (mouth) {
+            case 1: return 0.45f;
+            case 2: return 1.00f;
+            case 3: return 0.35f;   // 'e'
+            case 4: return 0.55f;   // 'u'
+            default: return 0.0f;   // closed
+        }
+    }
+
+    bool RenderDrawnFaceLocked() {
+        if (!vector_face_.ready()) {
+            lv_obj_t* screen = lv_screen_active();
+            if (screen == nullptr) return false;
+            if (!vector_face_.begin(screen)) return false;
+        }
+        const int idx = (current_face_index_ >= 0 && current_face_index_ < 6)
+                            ? current_face_index_ : 0;
+        vector_face_.setExpression(static_cast<stackchan::avatar::Expression>(idx));
+        vector_face_.setBlink(BlinkFromEyesIndex(current_eyes_index_));
+        vector_face_.setMouthOpen(OpenFromMouthIndex(current_mouth_index_));
+        vector_face_.show();
+        // The bitmap layer must not sit on top of the drawn one.
+        if (avatar_img_ != nullptr) lv_obj_add_flag(avatar_img_, LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
+#endif
+
     bool RenderAvatarLocked() {
+#ifdef CONFIG_STACKCHAN_VECTOR_FACE
+        return RenderDrawnFaceLocked();
+#else
         const lv_image_dsc_t* dsc = nullptr;
         if (avatar_set_.is_loaded() &&
             avatar_set_.mode() == AvatarSet::Mode::kMatrix) {
@@ -4668,6 +4750,7 @@ private:
         lv_obj_move_foreground(avatar_img_);
         BringListeningIndicatorToFrontLocked();
         return true;
+#endif  // CONFIG_STACKCHAN_VECTOR_FACE
     }
 
     // ---- Avatar fetch pending machinery (intent doc invariant #6) -------
@@ -4889,6 +4972,11 @@ private:
             DisplayLockGuard lock(display_);
             if (avatar_img_ != nullptr) {
                 lv_obj_add_flag(avatar_img_, LV_OBJ_FLAG_HIDDEN);
+            }
+#ifdef CONFIG_STACKCHAN_VECTOR_FACE
+            vector_face_.hide();
+#endif
+            if (avatar_img_ != nullptr) {
             }
         }
         current_avatar_face_ = "off";
@@ -5852,6 +5940,17 @@ private:
                 cJSON_AddBoolToObject(root, "emergency_stopped", d.emergency_stopped);
                 cJSON_AddStringToObject(root, "face", attention::ToString(d.face));
                 cJSON_AddStringToObject(root, "affect", attention::ToString(d.affect));
+                cJSON_AddStringToObject(root, "scan", attention::ToString(d.scan));
+                {
+                    const attention::ScanStats sc = head_->scanStats();
+                    cJSON* s = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(s, "stations", sc.stations);
+                    cJSON_AddNumberToObject(s, "sweeps", sc.sweeps);
+                    cJSON_AddNumberToObject(s, "listens", sc.listens);
+                    cJSON_AddNumberToObject(s, "engagements", sc.engagements);
+                    cJSON_AddNumberToObject(s, "losses", sc.losses);
+                    cJSON_AddItemToObject(root, "search", s);
+                }
 
 #ifdef CONFIG_STACKCHAN_FACE_DETECT
                 if (face_tracker_ != nullptr) {
@@ -5870,6 +5969,31 @@ private:
                 // Not a failure to report — the build simply has no detector.
                 cJSON_AddNullToObject(root, "detector");
 #endif
+                return root;
+            });
+
+        mcp_server.AddTool(
+            "self.robot.set_idle_search",
+            "Turn the idle search cycle on or off. With it on and nobody in "
+            "front of the robot, the head sweeps a few stations, pausing at "
+            "each long enough for the detector to get clean frames; a voice "
+            "stops the sweep and centres the head (the microphone array gives "
+            "no direction, so centre is the honest guess); a face hands the "
+            "head to the tracker. With it off the head simply holds still "
+            "when there is nobody to look at.",
+            PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+            [this](const PropertyList& properties) -> ReturnValue {
+                cJSON* root = cJSON_CreateObject();
+                if (head_ == nullptr) {
+                    cJSON_AddBoolToObject(root, "ok", false);
+                    cJSON_AddStringToObject(root, "reason", "head controller unavailable");
+                    return root;
+                }
+                const bool enabled = properties["enabled"].value<bool>();
+                head_->setIdleScanEnabled(enabled,
+                                          (uint32_t)(esp_timer_get_time() / 1000));
+                cJSON_AddBoolToObject(root, "ok", true);
+                cJSON_AddBoolToObject(root, "enabled", head_->idleScanEnabled());
                 return root;
             });
 

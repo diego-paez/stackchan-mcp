@@ -61,7 +61,8 @@ HeadController::HeadController(VisionTracker& vision, ServoSink& sink,
       mixer_(neutral),
       neutral_(neutral),
       schedule_(schedule),
-      greeting_(neutral) {}
+      greeting_(neutral),
+      scan_(IdleScanConfig{}, neutral) {}
 
 void HeadController::begin(uint32_t now_ms) {
     // Seed from the real pose. Without this the first command interpolates
@@ -159,6 +160,7 @@ void HeadController::runSelfTest(uint32_t now_ms) {
 }
 
 void HeadController::beginTracking(uint32_t now_ms) {
+    scan_.begin(now_ms);
     // Behaviour first, then read its settings. The other order asks the
     // *outgoing* behaviour whether tracking should be on — and the behaviour
     // on the way out is always one that had it off (LOOK_CENTER while the
@@ -226,6 +228,9 @@ void HeadController::update(uint32_t now_ms) {
         const FaceTarget t = vision_.getTarget();
         diag_.raw_target = t;
         attention_.update(t, now_ms, dt);
+        scan_.observeFace(t.visible, now_ms);
+        scan_.update(now_ms);
+        diag_.scan = scan_.state();
         diag_.filtered_x = attention_.filteredX();
         diag_.filtered_y = attention_.filteredY();
         diag_.tracking = attention_.state();
@@ -252,6 +257,16 @@ void HeadController::update(uint32_t now_ms) {
             const MixResult m = mixer_.mix(s, attention_.getTarget(), has_target);
             target = m.pose;
             diag_.source = m.source;
+
+            // The sweep is the lowest-priority opinion about the head. It
+            // speaks only when tracking is enabled, nothing is being tracked,
+            // and no behaviour has offered a pose of its own — so LOOK_CENTER,
+            // THINK and SLEEP all still win, and a face always wins.
+            if (s.tracking_enabled && !s.has_fixed_pose && !has_target &&
+                scan_.wantsControl()) {
+                target = scan_.pose();
+                diag_.source = MixSource::kBehaviorPose;
+            }
         }
 
         diag_.behavior = behavior_.current();
