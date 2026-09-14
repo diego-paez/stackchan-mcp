@@ -7,7 +7,7 @@ and as an MCP client that sends commands TO the ESP32.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import json
 import logging
 import os
@@ -26,6 +26,14 @@ from .audio_stream import (
     is_recording_session,
     start_recording,
     stop_recording,
+)
+from .end_of_speech import (
+    DEFAULT_LEAD_SILENCE_MS,
+    DEFAULT_LEAD_WINDOW_MS,
+    DEFAULT_MAX_MS,
+    DEFAULT_SILENCE_MS,
+    OpusEndOfSpeech,
+    settings_from_env,
 )
 from .notify_config import (
     DEFAULT_MESSAGE_TEMPLATES,
@@ -504,6 +512,15 @@ class ESP32Manager:
         # session (e.g., a fresh reconnection or an MCP-driven listen()
         # that already took the slot).
         self._device_driven_session_id: str | None = None
+        # End-of-speech settings for device-driven captures, read from
+        # the environment once at start() so a room can be tuned
+        # without a code change. Empty dict = library defaults.
+        self._end_of_speech_opts: dict[str, int] = {}
+        self._end_of_speech_enabled: bool = True
+        # Logged once per process rather than once per capture: a
+        # gateway without the codec extra would otherwise repeat the
+        # same warning on every utterance.
+        self._end_of_speech_warned: bool = False
         self._tool_lane_locks = {
             "servo": asyncio.Lock(),
             "wifi": asyncio.Lock(),
@@ -551,6 +568,84 @@ class ESP32Manager:
         """
         return self._listen_lock
 
+    def _end_of_speech_hook(
+        self,
+        connection: "ESP32Connection",
+        session_id: str,
+    ) -> Callable[[bytes], None] | None:
+        """Build the per-capture frame hook that closes the window.
+
+        Returns ``None`` when auto-stop is switched off or the Opus
+        codec is unavailable, in which case the capture behaves as it
+        did before: it stays open until the device ends it.
+
+        The returned callable is invoked from the WebSocket read loop
+        for every inbound frame, so it must not block. Decoding is
+        microseconds; the stop is dispatched as a task.
+        """
+        if not self._end_of_speech_enabled:
+            return None
+
+        watcher = OpusEndOfSpeech(**self._end_of_speech_opts)
+        if not watcher.available:
+            if not self._end_of_speech_warned:
+                self._end_of_speech_warned = True
+                logger.warning(
+                    "end-of-speech auto-stop unavailable (%s); "
+                    "device-driven captures will run until the device "
+                    "ends them",
+                    watcher.error,
+                )
+            return None
+
+        stopped = False
+
+        def on_frame(frame: bytes) -> None:
+            # `stopped` guards the window between our stop going out
+            # and the device's echo closing the slot: frames already in
+            # flight still arrive, and must not queue a second stop.
+            nonlocal stopped
+            if stopped:
+                return
+            reason = watcher.feed(frame)
+            if reason is None:
+                return
+            stopped = True
+            logger.info(
+                "end of speech: session=%s reason=%s after %.2fs "
+                "(speech %.2fs, floor %.5f)",
+                session_id,
+                reason,
+                watcher.detector.elapsed_ms / 1000,
+                watcher.detector.speech_ms / 1000,
+                watcher.detector.noise_floor,
+            )
+            # The device answers a stop by sending its own
+            # ``{"type":"listen","state":"stop"}`` back up, and that
+            # echo is what flushes the buffer to the hook — so there is
+            # nothing to do here but ask.
+            asyncio.create_task(self._stop_listening(connection, session_id))
+
+        return on_frame
+
+    async def _stop_listening(
+        self,
+        connection: "ESP32Connection",
+        session_id: str,
+    ) -> None:
+        """Ask the device to close a listening window it opened itself."""
+        try:
+            await connection.send_listen_state("stop")
+        except Exception as exc:
+            # A device that vanished mid-utterance is an ordinary
+            # event, and the disconnect path already cleans up the
+            # recording slot. Nothing here should escape into the read
+            # loop's task.
+            logger.info(
+                "could not stop listening on session=%s: %s",
+                session_id, exc,
+            )
+
     async def start(
         self,
         host: str = "0.0.0.0",
@@ -565,11 +660,30 @@ class ESP32Manager:
         self._vision_token = vision_token
         self._audio_hook_url = audio_hook_url
         self._audio_hook_token = audio_hook_token
+        self._end_of_speech_enabled, self._end_of_speech_opts = settings_from_env()
         if audio_hook_url:
             logger.info(
                 "Device-driven listen capture enabled (audio hook %s)",
                 audio_hook_url,
             )
+            if self._end_of_speech_enabled:
+                logger.info(
+                    "End-of-speech auto-stop: silence %dms "
+                    "(lead %dms for the first %dms), hard cap %dms",
+                    self._end_of_speech_opts.get(
+                        "silence_ms", DEFAULT_SILENCE_MS),
+                    self._end_of_speech_opts.get(
+                        "lead_silence_ms", DEFAULT_LEAD_SILENCE_MS),
+                    self._end_of_speech_opts.get(
+                        "lead_window_ms", DEFAULT_LEAD_WINDOW_MS),
+                    self._end_of_speech_opts.get("max_ms", DEFAULT_MAX_MS),
+                )
+            else:
+                logger.warning(
+                    "End-of-speech auto-stop disabled "
+                    "(STACKCHAN_VAD_AUTOSTOP=0); device-driven captures "
+                    "will run until the device ends them"
+                )
         logger.info(
             "ESP32 WebSocket server starting on ws://%s:%d "
             "ping_interval=%s ping_timeout=%s",
@@ -754,12 +868,25 @@ class ESP32Manager:
                                 session_id,
                             )
                         else:
-                            start_recording(session_id)
+                            # Close the window ourselves when the
+                            # speaker stops. The device entered
+                            # ``kListeningModeAutoStop``, which in the
+                            # xiaozhi protocol means exactly this: the
+                            # server decides where the utterance ends.
+                            # Until this existed nothing did, and a
+                            # capture ran until something unrelated
+                            # ended it. See
+                            # :mod:`stackchan_mcp.end_of_speech`.
+                            hook = self._end_of_speech_hook(
+                                connection, session_id,
+                            )
+                            start_recording(session_id, frame_hook=hook)
                             self._device_driven_session_id = session_id
                             logger.info(
                                 "device-driven listen started: "
-                                "session=%s mode=%s",
+                                "session=%s mode=%s auto_stop=%s",
                                 session_id, data.get("mode", ""),
+                                "yes" if hook else "no",
                             )
                     elif state == "stop":
                         if self._device_driven_session_id == session_id:

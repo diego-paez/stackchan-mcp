@@ -55,6 +55,28 @@ Environment variables:
   STACKCHAN_AUDIO_HOOK_TOKEN
                            Bearer token for the audio hook endpoint;
                            falls back to STACKCHAN_TOKEN.
+  STACKCHAN_VAD_AUTOSTOP   Set to 0 to stop closing device-driven
+                           listen windows when the speaker stops. The
+                           window then runs until the device ends it,
+                           which is what happened before this existed.
+  STACKCHAN_VAD_SILENCE_MS Trailing silence that ends a window, once
+                           the sentence is under way (default 1000).
+                           Lower is a faster reply and a higher chance
+                           of cutting a slow speaker off mid-sentence.
+  STACKCHAN_VAD_LEAD_SILENCE_MS
+                           Silence tolerated for a gap that opens in
+                           the first moments of a window (default
+                           2000) — people pause after the wake word
+                           before they start talking.
+  STACKCHAN_VAD_LEAD_WINDOW_MS
+                           How long that generous tolerance lasts
+                           (default 4000).
+  STACKCHAN_VAD_LEAD_IN_MS Give up on a window nobody spoke in after
+                           this long (default 6000).
+  STACKCHAN_VAD_MAX_MS     Hard cap on a window (default 25000). Keep
+                           it under the transcriber's limit — Whisper's
+                           encoder takes 30 s and a longer capture is
+                           not slow, it is lost.
   HOST                     Bind address for the ESP32 WebSocket server
                            (default 0.0.0.0).
   WS_PORT                  Port for the ESP32 WebSocket server
@@ -588,6 +610,31 @@ def _run_preflight() -> int:
             print(
                 "  STACKCHAN_AUDIO_HOOK_TOKEN not set "
                 "(will reuse STACKCHAN_TOKEN)"
+            )
+        # Imported here rather than at module scope: the config
+        # printer is the only caller.
+        from .end_of_speech import (
+            DEFAULT_LEAD_SILENCE_MS,
+            DEFAULT_LEAD_WINDOW_MS,
+            DEFAULT_MAX_MS,
+            DEFAULT_SILENCE_MS,
+            settings_from_env,
+        )
+
+        enabled, opts = settings_from_env()
+        if enabled:
+            print(
+                "  end-of-speech auto-stop on "
+                f"(silence {opts.get('silence_ms', DEFAULT_SILENCE_MS)}ms, "
+                f"lead {opts.get('lead_silence_ms', DEFAULT_LEAD_SILENCE_MS)}ms "
+                f"for {opts.get('lead_window_ms', DEFAULT_LEAD_WINDOW_MS)}ms, "
+                f"cap {opts.get('max_ms', DEFAULT_MAX_MS)}ms)"
+            )
+        else:
+            print(
+                "  end-of-speech auto-stop OFF "
+                "(STACKCHAN_VAD_AUTOSTOP=0 — captures run until the "
+                "device ends them)"
             )
     else:
         print(
