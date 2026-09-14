@@ -67,6 +67,7 @@ add_executable(attention_safety_test
     ../main/boards/stackchan/attention/motion_mixer.cc
     ../main/boards/stackchan/attention/head_controller.cc
     ../main/boards/stackchan/attention/greeting_routine.cc
+    ../main/boards/stackchan/attention/face_mimic.cc
 )
 
 target_include_directories(attention_safety_test
@@ -89,5 +90,46 @@ add_executable(sim_greeting
     ../main/boards/stackchan/attention/motion_mixer.cc
     ../main/boards/stackchan/attention/head_controller.cc
     ../main/boards/stackchan/attention/greeting_routine.cc
+    ../main/boards/stackchan/attention/face_mimic.cc
 )
 target_include_directories(sim_greeting PRIVATE ../main/boards/stackchan)
+
+# --- face mimic ---------------------------------------------------------
+# What the screen does about the face the head is following. Separate target
+# from attention_safety_test because it answers a separate question: that one
+# is about what can reach a servo, this one is about what can reach the
+# display. See main/boards/stackchan/attention/face_mimic.h.
+add_executable(face_mimic_test
+    test_face_mimic.cc
+    ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/servo_safety_controller.cc
+    ../main/boards/stackchan/attention/attention_controller.cc
+    ../main/boards/stackchan/attention/motion_controller.cc
+    ../main/boards/stackchan/attention/behavior_manager.cc
+    ../main/boards/stackchan/attention/motion_mixer.cc
+    ../main/boards/stackchan/attention/head_controller.cc
+    ../main/boards/stackchan/attention/greeting_routine.cc
+)
+
+target_include_directories(face_mimic_test
+    PRIVATE ../main/boards/stackchan
+)
+
+target_link_libraries(face_mimic_test PRIVATE GTest::gtest_main)
+
+gtest_discover_tests(face_mimic_test)
+
+# Not a test — a simulation you read, for the half of the mimic design that
+# assertions cannot reach: whether the response table reads as empathy.
+add_executable(sim_mimic
+    sim_mimic.cc
+    ../main/boards/stackchan/attention/face_mimic.cc
+    ../main/boards/stackchan/attention/servo_safety_controller.cc
+    ../main/boards/stackchan/attention/attention_controller.cc
+    ../main/boards/stackchan/attention/motion_controller.cc
+    ../main/boards/stackchan/attention/behavior_manager.cc
+    ../main/boards/stackchan/attention/motion_mixer.cc
+    ../main/boards/stackchan/attention/head_controller.cc
+    ../main/boards/stackchan/attention/greeting_routine.cc
+)
+target_include_directories(sim_mimic PRIVATE ../main/boards/stackchan)

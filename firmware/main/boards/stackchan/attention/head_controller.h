@@ -20,6 +20,7 @@
 
 #include "attention_controller.h"
 #include "behavior_manager.h"
+#include "face_mimic.h"
 #include "greeting_routine.h"
 #include "motion_controller.h"
 #include "motion_mixer.h"
@@ -35,6 +36,7 @@ struct ScheduleConfig {
     uint32_t attention_period_ms = 40;   // 25 Hz
     uint32_t behavior_period_ms = 50;    // 20 Hz
     uint32_t servo_period_ms = 25;       // 40 Hz
+    uint32_t mimic_period_ms = 100;      // 10 Hz — the face is not a servo
 };
 
 // Progress of the pre-flight movement test. Tracking stays disabled until
@@ -63,6 +65,8 @@ struct Diagnostics {
     bool emergency_stopped = false;
     uint32_t safety_rejected = 0;
     uint32_t safety_clamped = 0;
+    AvatarFace face = AvatarFace::kIdle;
+    Affect affect = Affect::kUnknown;
 };
 
 class HeadController {
@@ -90,14 +94,36 @@ public:
     SelfTestState selfTestState() const { return self_test_; }
     Diagnostics diagnostics() const { return diag_; }
 
+    using ExpressionFn = GreetingRoutine::ExpressionFn;
+
+    // --- the face ---------------------------------------------------------
+    // One sink, shared by the greeting and the mimic, for the same reason
+    // MotionMixer exists: two components with independent opinions about one
+    // output is how a screen ends up flickering between them. While the
+    // greeting plays it owns the face outright and the mimic is suppressed.
+    void setExpressionSink(ExpressionFn fn);
+
+    // Report what the person sounds or looks like. Labels are the pipeline's
+    // ("happy", "sad", "anger", ...); anything unrecognised is counted and
+    // ignored rather than guessed at. Safe to call at any rate, including
+    // once per utterance, which is what the transcribe endpoint affords.
+    void observeAffect(const char* label, float confidence, uint32_t now_ms);
+
+    void setMimicEnabled(bool on) { mimic_.setEnabled(on); }
+    bool mimicEnabled() const { return mimic_.enabled(); }
+    AvatarFace mimicFace() const { return mimic_.face(); }
+    MimicStats mimicStats() const { return mimic_.stats(); }
+    void setMimicConfig(const MimicConfig& cfg) { mimic_.setConfig(cfg); }
+    void setMimicPolicy(const MimicPolicy& p) { mimic_.setPolicy(p); }
+
     // --- greeting ---------------------------------------------------------
     // Runs once, after the self-test passes and before tracking starts. The
     // sinks are optional; set them before begin() or the first beats go
     // nowhere. Disabling it hands straight from the self-test to tracking.
     void setGreetingEnabled(bool on) { greeting_enabled_ = on; }
-    void setGreetingExpressionSink(GreetingRoutine::ExpressionFn fn) {
-        greeting_.setExpressionSink(std::move(fn));
-    }
+    // Kept as the name the board integration already uses; the greeting and
+    // the mimic have shared one sink since the mimic existed.
+    void setGreetingExpressionSink(ExpressionFn fn) { setExpressionSink(std::move(fn)); }
     void setGreetingSpeechSink(GreetingRoutine::SpeechFn fn) {
         greeting_.setSpeechSink(std::move(fn));
     }
@@ -121,6 +147,7 @@ private:
     void beginTracking(uint32_t now_ms);
     void driveTo(const HeadPose& target, float dt_sec, uint32_t now_ms);
     void emit(uint32_t now_ms);
+    void updateMimic(uint32_t now_ms);
 
     VisionTracker& vision_;
     ServoSink& sink_;
@@ -145,6 +172,11 @@ private:
 
     GreetingRoutine greeting_;
     bool greeting_enabled_ = true;
+
+    FaceMimic mimic_;
+    ExpressionFn expression_;
+    uint32_t last_mimic_ms_ = 0;
+    uint32_t now_ms_ = 0;
 
     bool started_ = false;
     bool diag_enabled_ = true;

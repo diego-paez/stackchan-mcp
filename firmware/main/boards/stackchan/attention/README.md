@@ -16,6 +16,7 @@ Priority order, as specified: **safety > stability > smoothness > tracking speed
 | Servo self-test | written, tested |
 | Board integration adapter | written, **not compiled** — see Assumptions |
 | Face detection | written, **not compiled** — esp-dl adapter + tested geometry |
+| Face mimic (what the screen does about the face) | written, 27 host tests passing |
 
 Nothing here has run on hardware.
 
@@ -46,8 +47,83 @@ board's existing `WriteHeadAngles()`.
     board_servo_sink.h          adapter onto StackChanBoard::WriteHeadAngles
     greeting_routine.{h,cc}     the scripted introduction, played once on waking
     face_geometry.h             detector box -> FaceTarget; pure, host-tested
+    face_mimic.{h,cc}           observed affect -> avatar face; policy, hysteresis
     espdl_face_tracker.{h,cc}   the real VisionTracker, backed by esp-dl
     head_controller.{h,cc}      wires it together and schedules it
+
+## The face
+
+The head follows a person; `face_mimic` decides what the screen does about
+them. It is a separate axis from everything above — an expression is never a
+servo command, and `HeadControllerMimic.TheFaceDoesNotDisturbTheHead` asserts
+exactly that.
+
+**The two vocabularies do not match and cannot.** The pipeline reports seven
+affects (`chatbot/models/emotion/base.py`); the avatar has six faces
+(`stackchan.cc`, `FaceNameToIndex`). So there is a table:
+
+| she is | the robot shows | |
+|---|---|---|
+| happy | happy | mirror |
+| surprise | surprised | mirror — shared surprise is joint attention |
+| sad | sad | mirror — a sad child met with a cheerful face reads as not having been heard |
+| anger | thinking | **answer.** Attentive, rather than matching the escalation |
+| fear | sad | **answer.** Concern, not alarm |
+| disgust | embarrassed | answer — the nearest thing the avatar has |
+| neutral | idle | rest |
+
+Mirroring indiscriminately is not empathy, it is a loop: anger reflected at an
+angry child escalates, fear reflected confirms there is something to fear.
+Those seven rows are a pedagogical judgement and **no host test can tell you
+they are right.** The tests prove the table is applied consistently, that the
+face cannot flicker, and that it cannot get stuck. Run `sim_mimic` to judge
+the rest — it prints a short conversation and what the face did about it.
+
+### Not moving, again
+
+The same priority order applies. A reading confirms by any of three routes,
+because this layer cannot know how fast its source is — a per-frame emotion
+stream arrives at 5 Hz, the transcribe endpoint once per utterance:
+
+* **by count** — `confirmations` agreeing readings in a row (400 ms at 5 Hz;
+  a whole conversational turn at one per utterance, which is why it is not
+  the only route)
+* **by confidence** — `instant_confidence`, set at 0.65 from what the models
+  actually return for a clear utterance, not from a round number
+* **by dwell** — `confirm_dwell_ms` with nothing contradicting it, which is
+  what lets one utterance land without lowering the confidence bar to where
+  noise passes. A contradiction resets the clock, so alternating readings
+  confirm by no route at all.
+
+Then `min_hold_ms` is a floor between changes regardless, and `stale_ms`
+returns the face to idle when nobody has said anything — a robot still
+wearing the last thing it was told is stuck, not expressive.
+
+A failed emotion model returns a uniform distribution, 1/7 = 0.143 on every
+label. `min_confidence` is what makes that move nothing at all.
+
+### Who owns the screen
+
+One sink, for the same reason `MotionMixer` exists. Two states stop the mimic
+and they are **not** the same thing:
+
+* **suppressed** — the greeting owns the face while it plays, the mouth owns
+  it while the robot speaks. The policy keeps running so the answer is
+  current the moment it is free.
+* **halted** — the robot has been emergency-stopped. Observations are dropped
+  rather than accumulated and the face goes to idle. Conflating this with
+  suppression was a bug: provoking a stopped robot left it wearing an
+  expression the instant it was released.
+
+### `"neutral"` was never a face
+
+The greeting script opened and closed on the expression `"neutral"`, which
+`FaceNameToIndex()` has never known — the avatar's resting face is `"idle"`.
+On hardware this fails silently: the expression is logged as deferred and the
+previous face stays up. Fixed, and `FaceFromName()` now publishes the six
+renderable names so this is checkable;
+`HeadControllerMimic.EveryExpressionTheRobotShowsIsOneTheAvatarCanRender`
+walks a whole boot and checks every string that leaves for the display.
 
 ## Startup sequence
 
@@ -84,7 +160,7 @@ stops during a greeting.
 Expression and speech leave through `std::function` sinks:
 
     head.setGreetingExpressionSink([display](const char* e) {
-        display->SetEmotion(e);            // "neutral", "happy", "surprised"
+        display->SetEmotion(e);            // "idle", "happy", "surprised"
     });
     head.setGreetingSpeechSink([](const char* line) {
         // whatever this firmware's speech path turns out to be
@@ -107,7 +183,10 @@ costs nothing:
     cmake --build build/host_test --target attention_safety_test
     ./build/host_test/attention_safety_test
 
-22 tests. The ones that matter:
+    cmake --build build/host_test && (cd build/host_test && ctest)
+
+40 ctest entries. `attention_safety_test` is the servo chain; `face_mimic_test`
+is the screen. The ones that matter:
 
 * `RejectsAbsurdYaw` — ±1000° is **refused**, not clamped to the edge of travel
 * `RejectsNaNAndInfinity` — NaN/±Inf in pitch, and a NaN `dt`
@@ -122,6 +201,17 @@ costs nothing:
   second, asserting the step limit on every write
 * `NoiseDoesNotProduceContinuousOscillation` — jitter inside the dead zone
   produces no motion
+
+And for the face:
+
+* `AFailedEmotionModelCannotMoveTheFace` — 200 readings at 1/7 confidence
+* `NaNConfidenceIsRejectedRatherThanRankedHigh`
+* `AlternatingStrongReadingsCannotMakeItFlicker` — 12 s of a model swinging
+  between two confident answers ten times a second
+* `ContradictedReadingsNeverConfirmByDwell` — dwell is not a way in for noise
+* `StalenessSurvivesTheMillisecondWrap` — 49 days, and a face frozen forever
+* `EmergencyStopReturnsTheFaceToIdleAndKeepsItThere`
+* `TheFaceDoesNotDisturbTheHead` — an expression is never a servo command
 
 Rejection is deliberate where clamping would be wrong. NaN does not mean
 "somewhere near the middle"; it means the caller is broken, and turning it

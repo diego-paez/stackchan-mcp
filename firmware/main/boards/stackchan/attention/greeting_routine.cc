@@ -23,14 +23,14 @@ namespace {
 // the routine runs slightly longer than the sum below and does so smoothly.
 constexpr GreetingKeyframe kScript[] = {
     // dyaw  up    expression     say                        hold
-    {   0.0f, -6.0f, "neutral",   nullptr,                   500 },  // head dips: waking
+    {   0.0f, -6.0f, "idle",      nullptr,                   500 },  // head dips: waking
     {   0.0f,  8.0f, "surprised", nullptr,                   450 },  // lifts: notices you
     { -14.0f,  4.0f, "happy",     nullptr,                   500 },  // looks off to one side
     {  14.0f,  4.0f, "happy",     nullptr,                   600 },  // sweeps across
     {   0.0f,  3.0f, "happy",     "Greetings, I am Stacky",  1800 }, // centres, and speaks
     {   0.0f, -5.0f, "happy",     nullptr,                   350 },  // nod down
     {   0.0f,  3.0f, "happy",     nullptr,                   350 },  // and up: the bow closes
-    {   0.0f,  0.0f, "neutral",   nullptr,                   500 },  // settle, ready to track
+    {   0.0f,  0.0f, "idle",      nullptr,                   500 },  // settle, ready to track
 };
 constexpr int kScriptCount = sizeof(kScript) / sizeof(kScript[0]);
 

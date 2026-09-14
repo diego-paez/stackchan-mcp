@@ -78,9 +78,37 @@ void HeadController::begin(uint32_t now_ms) {
     self_test_step_ms_ = now_ms;
     started_ = true;
     last_vision_ms_ = last_attention_ms_ = last_behavior_ms_ = last_servo_ms_ = now_ms;
+    last_mimic_ms_ = now_ms;
+    now_ms_ = now_ms;
 
     ATT_LOGI("begin: pose yaw=%.1f pitch=%.1f, self-test starting",
              actual.yaw_deg, actual.pitch_deg);
+}
+
+void HeadController::setExpressionSink(ExpressionFn fn) {
+    expression_ = fn;
+    // The greeting keeps its own copy: it fires expressions from inside its
+    // own timeline and must not have to reach back through this class.
+    greeting_.setExpressionSink(std::move(fn));
+}
+
+void HeadController::observeAffect(const char* label, float confidence, uint32_t now_ms) {
+    mimic_.observe(label, confidence, now_ms);
+}
+
+// The face is suppressed, not disabled, whenever something else owns the
+// screen or the robot has been stopped. Suppressed means the policy keeps
+// running and the answer stays current, so nothing snaps when it lifts.
+void HeadController::updateMimic(uint32_t now_ms) {
+    const bool someone_else_owns_the_face =
+        self_test_ != SelfTestState::kPassed || greeting_.running();
+    mimic_.setSuppressed(someone_else_owns_the_face);
+    mimic_.setHalted(safety_.emergencyStopped(), now_ms);
+
+    if (mimic_.update(now_ms) && expression_) expression_(mimic_.faceName());
+
+    diag_.face = mimic_.face();
+    diag_.affect = mimic_.affect();
 }
 
 void HeadController::setTrackingEnabled(bool on) {
@@ -93,6 +121,9 @@ void HeadController::emergencyStop() {
     attention_.setEnabled(false);
     attention_.reset();
     greeting_.cancel();
+    // Same rule as the greeting: a stopped robot does not keep emoting. The
+    // face returns to idle and stays there until the stop is cleared.
+    mimic_.setHalted(true, now_ms_);
     ATT_LOGW("EMERGENCY STOP — holding position, all behaviour cancelled");
 }
 
@@ -167,6 +198,12 @@ void HeadController::driveTo(const HeadPose& target, float dt_sec, uint32_t now_
 
 void HeadController::update(uint32_t now_ms) {
     if (!started_) return;
+    now_ms_ = now_ms;
+
+    if ((now_ms - last_mimic_ms_) >= schedule_.mimic_period_ms) {
+        last_mimic_ms_ = now_ms;
+        updateMimic(now_ms);
+    }
 
     if ((now_ms - last_behavior_ms_) >= schedule_.behavior_period_ms) {
         last_behavior_ms_ = now_ms;

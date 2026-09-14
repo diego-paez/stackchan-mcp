@@ -477,8 +477,8 @@ TEST(Greeting, SpeaksItsLineOnceAndShowsExpressions) {
     EXPECT_EQ(said[0], "Greetings, I am Stacky");
 
     ASSERT_FALSE(shown.empty());
-    EXPECT_EQ(shown.front(), "neutral");
-    EXPECT_EQ(shown.back(), "neutral") << "must settle back to a neutral face";
+    EXPECT_EQ(shown.front(), "idle");
+    EXPECT_EQ(shown.back(), "idle") << "must settle back to the resting face";
     EXPECT_NE(std::find(shown.begin(), shown.end(), "happy"), shown.end());
 }
 
