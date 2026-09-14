@@ -37,15 +37,29 @@ struct ServoLimits {
     float min_yaw_deg = -30.0f;
     float max_yaw_deg = 30.0f;
 
-    // 45 +/- 20, i.e. 25..65. Inside M5Stack's recommended 5..85 with room to
-    // spare. Never widen these toward the hard clamp without a reason written
-    // down next to the change.
-    float min_pitch_deg = 25.0f;
-    float max_pitch_deg = 65.0f;
+    // The pitch envelope follows where the robot actually sits. This unit is
+    // on a LOW base, so 45 -- the boot pose, nominally "level" -- points the
+    // camera at the ceiling: photographs across the whole old envelope showed
+    // wall and ceiling at every angle and never reached horizontal.
+    //
+    // 5..55 instead. The floor is M5Stack's documented recommended minimum,
+    // not the 0 hard clamp: level is close to the bottom of travel for a
+    // low-mounted robot, and a servo parked continuously at its end stop is
+    // exactly the "extreme angle" the datasheet warns about. The ceiling gives
+    // 43 degrees of look-up from neutral, which is what a robot on the floor
+    // needs to find a standing adult.
+    float min_pitch_deg = 5.0f;
+    float max_pitch_deg = 55.0f;
 
     // Rate limits. max_velocity is the sustained cap; max_step bounds a single
     // update so a stalled scheduler cannot turn one late tick into a lurch.
-    float max_velocity_deg_per_sec = 60.0f;
+    // Slow on purpose. At 60 deg/s the sweep read as constant motion and was
+    // simply annoying to sit next to; a robot looking around a room is not in
+    // a hurry. This is the sustained cap, not the speed anything asks for.
+    float max_velocity_deg_per_sec = 25.0f;
+    // Sized against the 120 ms command period: 25 deg/s allows 3 deg in that
+    // time, so the velocity cap is what shapes normal motion and this only
+    // bites when the scheduler stalls, which is its job.
     float max_step_deg = 3.0f;
 
     // Below this the SCS0009 stutters rather than moves (MIN_SMOOTH_SPEED_DPS
@@ -61,9 +75,13 @@ struct ServoLimits {
 
 // The pose the head is driven to at boot, on emergency stop, and whenever a
 // controller stops producing valid commands.
+// Where the head rests. Pitch is NOT the board's BOOT_INIT_PITCH_DEG of 45:
+// that is the middle of the servo's travel, not the direction the camera
+// looks, and on a low base it aims at the ceiling. 12 is a few degrees above
+// the recommended floor, which for this mounting is roughly level.
 struct NeutralPose {
     float yaw_deg = 0.0f;
-    float pitch_deg = 45.0f;
+    float pitch_deg = 12.0f;
 };
 
 // The hardware's own absolute bounds, mirrored so the safety controller can

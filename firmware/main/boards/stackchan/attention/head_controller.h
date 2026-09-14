@@ -36,7 +36,19 @@ struct ScheduleConfig {
     uint32_t vision_period_ms = 200;     //  5 Hz
     uint32_t attention_period_ms = 40;   // 25 Hz
     uint32_t behavior_period_ms = 50;    // 20 Hz
-    uint32_t servo_period_ms = 25;       // 40 Hz
+    // 8 Hz, not 40.
+    //
+    // Each command becomes a StackChanBoard::WriteHeadAngles() with a
+    // duration, and the board's motion driver interpolates toward it at
+    // MOTION_TICK_MS. Re-commanding every 25 ms restarted that interpolation
+    // before it could finish, and because the board tracks position in whole
+    // degrees every restart discarded the unfinished fraction: measured on
+    // hardware, the head crawled at 0.55 deg/s while the filter was allowing
+    // 25, with `limited:velocity` on every diagnostic line.
+    //
+    // Commanding at a period the board can actually complete hands the
+    // smoothing back to the driver that was written for it.
+    uint32_t servo_period_ms = 120;
     uint32_t mimic_period_ms = 100;      // 10 Hz — the face is not a servo
 };
 
@@ -109,6 +121,10 @@ public:
     ScanState scanState() const { return scan_.state(); }
     ScanStats scanStats() const { return scan_.stats(); }
     void setIdleScanConfig(const IdleScanConfig& cfg) { scan_.setConfig(cfg); }
+    void setScanDwellMs(uint32_t ms) { scan_.setDwellMs(ms); }
+    void setScanAmplitudeDeg(float deg) { scan_.setYawAmplitudeDeg(deg); }
+    void setScanPitchLiftDeg(float deg) { scan_.setPitchLiftDeg(deg); }
+    IdleScanConfig idleScanConfig() const { return scan_.config(); }
 
     // The board already knows this from Application::IsVoiceDetected().
     void observeVoice(bool speaking, uint32_t now_ms) { scan_.observeVoice(speaking, now_ms); }
@@ -182,6 +198,14 @@ private:
     uint32_t last_behavior_ms_ = 0;
     uint32_t last_servo_ms_ = 0;
     uint32_t last_diag_ms_ = 0;
+
+    // The head is driven to neutral BEFORE the self-test starts, which is
+    // what the README has always described. It went unnoticed while neutral
+    // happened to equal the board's boot pitch of 45; with neutral at 12 for
+    // a low-mounted robot the first "±5° self-test beat" was really a 33°
+    // journey, and the amplitude it asserts meant nothing.
+    bool settling_to_neutral_ = false;
+    uint32_t settle_started_ms_ = 0;
 
     SelfTestState self_test_ = SelfTestState::kNotStarted;
     int self_test_step_ = 0;

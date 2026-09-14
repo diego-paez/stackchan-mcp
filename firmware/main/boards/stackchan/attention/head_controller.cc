@@ -15,6 +15,11 @@
 namespace stackchan {
 namespace attention {
 
+// Close enough to neutral to call it arrived, and the longest the approach is
+// allowed to take before the self-test runs anyway.
+static constexpr float kSettleToleranceDeg = 2.0f;
+static constexpr uint32_t kSettleTimeoutMs = 8000;
+
 const char* ToString(SelfTestState s) {
     switch (s) {
         case SelfTestState::kNotStarted: return "not-started";
@@ -74,7 +79,9 @@ void HeadController::begin(uint32_t now_ms) {
     attention_.setEnabled(false);          // nothing tracks until the test passes
     behavior_.setBehavior(Behavior::LOOK_CENTER, now_ms);
 
-    self_test_ = SelfTestState::kRunning;
+    self_test_ = SelfTestState::kNotStarted;
+    settling_to_neutral_ = true;
+    settle_started_ms_ = now_ms;
     self_test_step_ = 0;
     self_test_step_ms_ = now_ms;
     started_ = true;
@@ -82,7 +89,7 @@ void HeadController::begin(uint32_t now_ms) {
     last_mimic_ms_ = now_ms;
     now_ms_ = now_ms;
 
-    ATT_LOGI("begin: pose yaw=%.1f pitch=%.1f, self-test starting",
+    ATT_LOGI("begin: pose yaw=%.1f pitch=%.1f, moving to neutral first",
              actual.yaw_deg, actual.pitch_deg);
 }
 
@@ -210,6 +217,25 @@ void HeadController::update(uint32_t now_ms) {
     if ((now_ms - last_behavior_ms_) >= schedule_.behavior_period_ms) {
         last_behavior_ms_ = now_ms;
         behavior_.update(now_ms);
+
+        if (settling_to_neutral_) {
+            // Arrived, or gave up waiting: a head that cannot reach neutral
+            // still needs its self-test, because the self-test is how that
+            // gets discovered.
+            const HeadPose at = sink_.readPose();
+            const float dy = at.yaw_deg - neutral_.yaw_deg;
+            const float dp = at.pitch_deg - neutral_.pitch_deg;
+            const float err = (dy < 0 ? -dy : dy) + (dp < 0 ? -dp : dp);
+            if (err <= kSettleToleranceDeg ||
+                (now_ms - settle_started_ms_) >= kSettleTimeoutMs) {
+                settling_to_neutral_ = false;
+                self_test_ = SelfTestState::kRunning;
+                self_test_step_ = 0;
+                self_test_step_ms_ = now_ms;
+                ATT_LOGI("at neutral (err %.1f deg), self-test starting", err);
+            }
+        }
+
         if (self_test_ == SelfTestState::kRunning) runSelfTest(now_ms);
         if (greeting_.running()) {
             greeting_.update(now_ms);

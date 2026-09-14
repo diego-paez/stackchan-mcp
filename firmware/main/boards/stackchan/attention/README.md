@@ -301,13 +301,33 @@ Everything tunable is a struct field, not a literal. Defaults:
 | | value | why |
 |---|---|---|
 | yaw travel | −30°…+30° | far inside anything mechanical |
-| pitch travel | 25°…65° | neutral 45 ± 20, inside M5Stack's 5–85 |
-| max velocity | 60 °/s | |
-| max step | 3° per update | bounds a scheduler stall |
-| speed | 80 °/s, capped 120 | `MAX_SPEED_DPS` is 240; no reason to approach it |
+| pitch travel | 5°…55° | this unit is on a LOW base; see below |
+| neutral pitch | 12° | NOT the board's `BOOT_INIT_PITCH_DEG` of 45 |
+| max velocity | 25 °/s | 60 read as constant motion and was tiring to sit beside |
+| max step | 2° per update | bounds a scheduler stall |
+| speed | 30 °/s, capped 120 | the gateway's own "low" preset, for unhurried motion |
 | dead zone | 8% x, 10% y | below ~4%, detector noise alone moves the head |
 | loss: hold / relax / search | 500 / 1500 ms / off | search off for the first test |
-| rates | servo 40 Hz, attention 25 Hz, behaviour 20 Hz, vision 5 Hz | |
+| rates | servo 8 Hz, attention 25 Hz, behaviour 20 Hz, vision 5 Hz | |
+
+## Where the robot sits changes the numbers
+
+`BOOT_INIT_PITCH_DEG` is 45 and it is the middle of the servo's travel, not
+the direction the camera looks. On this unit — a low base — 45 points the lens
+at the ceiling: photographs across the whole old 25–65 envelope showed wall
+and ceiling at every angle and never reached horizontal, so no amount of
+detector work would have found a face.
+
+Neutral is therefore 12, a few degrees above M5Stack's recommended floor of 5
+rather than at the 0 hard clamp, because a servo parked continuously at its
+end stop is the "extreme angle" the datasheet warns about. `IdleScan`'s
+`pitch_lift_deg` is 0 for the same reason: the 4° lift was written for a desk
+robot looking up at people standing over it, and on a low base it aimed
+further into the ceiling.
+
+None of these are universal. A robot on a shelf wants the old numbers back.
+`tune_idle_search` changes dwell, amplitude and gaze lift at runtime so the
+tuning can be done while watching the robot rather than through build cycles.
 
 ## Assumptions
 
@@ -403,7 +423,36 @@ self-test: it starts at neutral, requests +10° yaw, returns, −10°, returns,
 enable until it completes.
 
 Watch the diagnostics line. `rej=` and `clamp=` are the proof the safety
-layer is intercepting rather than passing everything through; if they stay
-zero while the head is tracking, that is expected — the motion controller is
-supposed to stay inside the envelope so the filter has nothing to do. Force a
-non-zero count with the host tests, not with the hardware.
+layer is intercepting rather than passing everything through.
+
+`rej=` should stay zero. `clamp=` should be near zero **while tracking a
+face**, where the motion controller makes small corrections and the filter has
+nothing to do. It is NOT zero during the idle search: a sweep travels tens of
+degrees between stations, and `clamped_` counts velocity and step limiting as
+well as envelope clamping, so every tick of a long travel that asks for more
+than `max_velocity_deg_per_sec * dt` is counted.
+
+Measured on hardware, and it turned out to be a real fault rather than the
+limiter earning its keep. With the servo stage at 40 Hz the diagnostic line
+read
+
+    req(10.5,12.0) out(-4.1,30.1) limited:velocity clamp=18424
+
+— the motion controller asking for pitch 12, the output pinned near 30, and
+the clamp counter climbing 63 times a second. The head crawled at 0.55 deg/s
+against an allowed 25.
+
+The cause was the command RATE, not the limits. Each command becomes a
+`WriteHeadAngles(yaw, pitch, duration)` and the board's motion driver
+interpolates toward it; re-commanding every 25 ms restarted that interpolation
+before it could finish, and because the board tracks position in whole degrees
+every restart discarded the unfinished fraction. Forty commands a second, each
+cancelling the last.
+
+At 8 Hz the same line reads
+
+    req(11.4,12.0) out(11.4,12.0) ok clamp=7
+
+with the count static. `out` tracks `req`, the verdict is `ok`, and the
+smoothing is done by the driver that was written for it. If `clamp` is ever
+seen climbing steadily again, suspect the command period before the limits.

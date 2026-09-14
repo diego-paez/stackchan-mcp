@@ -53,19 +53,24 @@ struct IdleScanConfig {
     // thing deciding where a sweep stops.
     float yaw_amplitude_deg = 22.0f;
 
-    // Faces are above the robot, not level with it: it sits on a desk and the
-    // people are standing or sitting over it. A small constant lift makes the
-    // sweep look where heads actually are.
-    float pitch_lift_deg = 4.0f;
+    // Zero, because this robot is on a LOW base and neutral is already about
+    // level. The lift existed for a desk robot looking up at people standing
+    // over it; applied here it aimed the camera further into the ceiling,
+    // which is the opposite of helpful. Raise it only for a high mounting.
+    float pitch_lift_deg = 0.0f;
 
-    // How long to hold each station. Long enough for the 5 Hz detector to get
-    // several clean frames of a stationary scene — a sweep that never stops
-    // moving is a sweep that never sees anybody.
-    uint32_t dwell_ms = 1400;
+    // How long to hold each station.
+    //
+    // 1400 ms was picked as "enough frames for a 5 Hz detector" and it is, but
+    // on hardware it reads as a head that never stops moving, and sitting next
+    // to it is irritating rather than companionable. 4500 ms is twenty-two
+    // frames, and a full seven-station sweep now takes about half a minute
+    // instead of ten seconds. Looking around a room is not a metronome.
+    uint32_t dwell_ms = 4500;
 
     // A voice keeps the head centred and still for this long after the last
     // time anybody spoke.
-    uint32_t listen_hold_ms = 2500;
+    uint32_t listen_hold_ms = 4000;
 
     // A face must be gone this long before the sweep resumes. Without it a
     // single dropped detection restarts the search and the head lurches away
@@ -111,6 +116,13 @@ public:
     bool enabled() const { return cfg_.enabled; }
     void setConfig(const IdleScanConfig& cfg) { cfg_ = cfg; }
     IdleScanConfig config() const { return cfg_; }
+
+    // Live tuning. The right dwell and amplitude depend on the room and on
+    // how the robot is mounted, neither of which is knowable from a header,
+    // so they are adjustable without a reflash. Applies from the next station.
+    void setDwellMs(uint32_t ms) { if (ms > 0) cfg_.dwell_ms = ms; }
+    void setYawAmplitudeDeg(float deg) { if (deg > 0.0f) cfg_.yaw_amplitude_deg = deg; }
+    void setPitchLiftDeg(float deg) { cfg_.pitch_lift_deg = deg; }
 
     // How many stations one full sweep visits. Exposed so a test can assert
     // on a whole pass without hard-coding the table's length.

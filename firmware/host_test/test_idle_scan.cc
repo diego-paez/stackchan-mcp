@@ -221,7 +221,7 @@ struct Rig {
     uint32_t boot() {
         uint32_t ms = 0;
         hc.begin(0);
-        for (; ms < 30000; ms += 10) hc.update(ms);
+        for (; ms < 45000; ms += 10) hc.update(ms);
         return ms;
     }
 };
@@ -246,7 +246,7 @@ TEST(HeadControllerScan, TheHeadLooksAroundWhenTheRoomIsEmpty) {
 TEST(HeadControllerScan, NothingScansUntilTheSelfTestAndGreetingAreDone) {
     Rig r;
     r.hc.begin(0);
-    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+    for (uint32_t ms = 0; ms < 45000; ms += 10) {
         r.hc.update(ms);
         if (r.hc.selfTestState() != SelfTestState::kPassed || r.hc.greeting()) {
             EXPECT_NE(r.hc.scanState(), ScanState::kScanning)

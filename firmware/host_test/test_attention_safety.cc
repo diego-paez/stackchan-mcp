@@ -402,8 +402,10 @@ TEST(HeadController, TrackingIsDisabledUntilTheSelfTestPasses) {
     hc.setDiagnosticsEnabled(false);
     hc.begin(0);
 
-    EXPECT_EQ(hc.selfTestState(), SelfTestState::kRunning);
-    // During the test the face is ignored: the source is never the tracker.
+    // Boot is settle-to-neutral, then self-test. Neither is "passed", and
+    // that is the thing tracking waits for.
+    EXPECT_NE(hc.selfTestState(), SelfTestState::kPassed);
+    // Throughout, the face is ignored: the source is never the tracker.
     for (uint32_t ms = 0; ms < 3000; ms += 10) {
         vision.see(0.9f, 0.0f, ms);
         hc.update(ms);
@@ -419,13 +421,21 @@ TEST(HeadController, SelfTestStaysWithinItsOwnSmallAmplitudes) {
     hc.setDiagnosticsEnabled(false);
     hc.begin(0);
 
-    for (uint32_t ms = 0; ms < 12000 && hc.selfTestState() == SelfTestState::kRunning;
+    // The head is driven to neutral first, and that journey is as long as the
+    // gap between the board's boot pitch and neutral — 33 degrees on a
+    // low-mounted robot. The amplitude claim is about the self-test itself,
+    // so the settling phase is skipped rather than asserted on.
+    bool saw_the_self_test = false;
+    for (uint32_t ms = 0; ms < 25000 && hc.selfTestState() != SelfTestState::kPassed;
          ms += 10) {
         hc.update(ms);
+        if (hc.selfTestState() != SelfTestState::kRunning) continue;
+        saw_the_self_test = true;
         if (!sink.last.valid) continue;
         EXPECT_LE(std::fabs(sink.last.yaw_deg - Neutral().yaw_deg), 10.0f + 1e-3f);
         EXPECT_LE(std::fabs(sink.last.pitch_deg - Neutral().pitch_deg), 5.0f + 1e-3f);
     }
+    EXPECT_TRUE(saw_the_self_test);
     EXPECT_EQ(hc.selfTestState(), SelfTestState::kPassed);
 }
 
@@ -448,7 +458,7 @@ TEST(Greeting, DoesNotStartUntilTheSelfTestPasses) {
 
     // Through the whole self-test — 9 beats at 1200 ms, so ~10.8 s — nothing
     // of the greeting has happened.
-    for (uint32_t ms = 0; ms < 12000; ms += 10) {
+    for (uint32_t ms = 0; ms < 22000; ms += 10) {
         hc.update(ms);
         if (hc.selfTestState() != SelfTestState::kPassed) {
             EXPECT_FALSE(hc.greeting());
@@ -471,7 +481,7 @@ TEST(Greeting, SpeaksItsLineOnceAndShowsExpressions) {
     hc.setGreetingExpressionSink([&](const char* e) { shown.push_back(e); });
 
     hc.begin(0);
-    for (uint32_t ms = 0; ms < 30000; ms += 10) hc.update(ms);
+    for (uint32_t ms = 0; ms < 45000; ms += 10) hc.update(ms);
 
     ASSERT_EQ(said.size(), 1u) << "the line must be spoken exactly once";
     EXPECT_EQ(said[0], "Greetings, I am Stacky");
@@ -491,7 +501,7 @@ TEST(Greeting, HandsOverToFaceTrackingWhenDone) {
     hc.begin(0);
 
     bool saw_greeting = false;
-    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+    for (uint32_t ms = 0; ms < 45000; ms += 10) {
         hc.update(ms);
         if (hc.greeting()) {
             saw_greeting = true;
@@ -517,7 +527,7 @@ TEST(Greeting, NeverLeavesTheSafeEnvelope) {
     float prev_yaw = Neutral().yaw_deg, prev_pitch = Neutral().pitch_deg;
     bool first = true;
 
-    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+    for (uint32_t ms = 0; ms < 45000; ms += 10) {
         hc.update(ms);
         if (!sink.last.valid) continue;
         EXPECT_GE(sink.last.yaw_deg, lim.min_yaw_deg - 1e-3f);
@@ -715,4 +725,82 @@ TEST(FaceGeometry, FeedsTheAttentionControllerCoherently) {
         << "a face to the right must turn the head right";
     EXPECT_LT(att.getTarget().pitch_deg, Neutral().pitch_deg - 0.5f)
         << "a face low in frame must lower the gaze";
+}
+
+// ---------------------------------------------------------------------------
+// Reaching neutral against a coarse servo
+//
+// The real SCS0009 reports whole degrees, and the board tracks its position
+// the same way. This is the end-to-end check that the approach still arrives
+// through that coarseness rather than creeping or stalling in it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A sink that reports position the way an SCS0009 does: whole degrees only.
+class QuantisingServoSink : public ServoSink {
+public:
+    void write(const ServoCommand& c) override {
+        if (!c.valid) return;
+        ++writes;
+        last = c;
+        yaw_ = static_cast<int>(c.yaw_deg < 0 ? c.yaw_deg - 0.5f : c.yaw_deg + 0.5f);
+        pitch_ = static_cast<int>(c.pitch_deg < 0 ? c.pitch_deg - 0.5f : c.pitch_deg + 0.5f);
+    }
+    HeadPose readPose() override {
+        HeadPose p;
+        p.yaw_deg = static_cast<float>(yaw_);
+        p.pitch_deg = static_cast<float>(pitch_);
+        return p;
+    }
+    bool ready() const override { return true; }
+
+    void placeAt(int yaw, int pitch) { yaw_ = yaw; pitch_ = pitch; }
+
+    ServoCommand last;
+    int writes = 0;
+
+private:
+    int yaw_ = 0;
+    int pitch_ = 45;
+};
+
+}  // namespace
+
+TEST(HeadController, ReachesNeutralThroughIntegerFeedback) {
+    ScriptedVisionTracker vision;
+    QuantisingServoSink sink;
+    sink.placeAt(0, 45);   // the board's boot pitch
+
+    ServoLimits limits;      // 25 deg/s over a 25 ms tick = a 0.625 deg budget,
+    MotionConfig motion;     // comfortably under the servo's 1 deg readback
+    HeadController hc(vision, sink, limits, Neutral(), Bounds(), AttentionConfig{},
+                      motion, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+
+    // Long enough to travel from 45 to neutral many times over at the capped
+    // speed; if it has not arrived by now it is stuck, not slow.
+    for (uint32_t ms = 0; ms < 40000; ms += 10) hc.update(ms);
+
+    EXPECT_NEAR(sink.readPose().pitch_deg, Neutral().pitch_deg, 3.0f)
+        << "the head never reached neutral";
+}
+
+TEST(HeadController, RecoversAfterTheHeadIsMovedByHand) {
+    ScriptedVisionTracker vision;
+    QuantisingServoSink sink;
+    HeadController hc(vision, sink, Limits(), Neutral(), Bounds(), AttentionConfig{},
+                      MotionConfig{}, ScheduleConfig{});
+    hc.setDiagnosticsEnabled(false);
+    hc.begin(0);
+    for (uint32_t ms = 0; ms < 40000; ms += 10) hc.update(ms);
+    ASSERT_NEAR(sink.readPose().pitch_deg, Neutral().pitch_deg, 3.0f);
+
+    // Somebody shoves the head well away from where it was told to be.
+    sink.placeAt(25, 50);
+    for (uint32_t ms = 40000; ms < 70000; ms += 10) hc.update(ms);
+
+    EXPECT_NEAR(sink.readPose().pitch_deg, Neutral().pitch_deg, 3.0f)
+        << "the controller did not recover after the head was moved by hand";
 }

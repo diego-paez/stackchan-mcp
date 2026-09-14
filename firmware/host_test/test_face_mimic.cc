@@ -382,7 +382,7 @@ struct Rig {
     uint32_t runUntilTracking(uint32_t step = 10) {
         uint32_t ms = 0;
         hc.begin(0);
-        for (; ms < 30000; ms += step) hc.update(ms);
+        for (; ms < 45000; ms += step) hc.update(ms);
         return ms;
     }
 };
@@ -413,7 +413,7 @@ TEST(HeadControllerMimic, TheGreetingOwnsTheFaceWhileItPlays) {
     Rig r;
     r.hc.begin(0);
     bool observed_during_greeting = false;
-    for (uint32_t ms = 0; ms < 30000; ms += 10) {
+    for (uint32_t ms = 0; ms < 45000; ms += 10) {
         r.hc.update(ms);
         if (r.hc.greeting()) {
             r.hc.observeAffect("anger", 0.99f, ms);   // shout at it mid-bow
@@ -436,7 +436,7 @@ TEST(HeadControllerMimic, NothingIsExpressedBeforeTheSelfTestPasses) {
     // the screen as well as to the servos.
     Rig r;
     r.hc.begin(0);
-    for (uint32_t ms = 0; ms < 12000; ms += 10) {
+    for (uint32_t ms = 0; ms < 22000; ms += 10) {
         r.hc.observeAffect("happy", 0.99f, ms);
         r.hc.update(ms);
         if (r.hc.selfTestState() != SelfTestState::kPassed) {
@@ -492,12 +492,19 @@ TEST(HeadControllerMimic, TheFaceDoesNotDisturbTheHead) {
     Rig r;
     uint32_t ms = r.runUntilTracking();
     r.vision.see(0.0f, 0.0f, ms);
-    for (uint32_t t = ms; t < ms + 1000; t += 10) r.hc.update(t);
+    // The approach is deliberately unhurried (MotionConfig::approach_per_sec
+    // is 0.8), so give it long enough to actually arrive before asserting it
+    // then stays put; otherwise this measures convergence, not stability.
+    for (uint32_t t = ms; t < ms + 5000; t += 10) {
+        r.vision.see(0.0f, 0.0f, t);
+        r.hc.update(t);
+    }
+    ms += 4000;
 
     const ServoCommand settled = r.sink.last;
     ASSERT_TRUE(settled.valid);
 
-    for (uint32_t t = ms + 1000; t < ms + 9000; t += 10) {
+    for (uint32_t t = ms + 1000; t < ms + 12000; t += 10) {
         r.vision.see(0.0f, 0.0f, t);
         if (t % 200 == 0) {
             r.hc.observeAffect((t / 200) % 2 ? "happy" : "surprise", 0.99f, t);

@@ -5998,6 +5998,41 @@ private:
             });
 
         mcp_server.AddTool(
+            "self.robot.tune_idle_search",
+            "Adjust how the idle search sweeps, without reflashing. dwell_ms "
+            "is how long the head holds each station before moving on (higher "
+            "is calmer; 4500 is the default and a full sweep then takes about "
+            "half a minute). yaw_deg is how far either side of centre it "
+            "looks. pitch_lift_deg raises the gaze above resting pitch, and "
+            "should be 0 or negative for a robot on a low base and positive "
+            "only for one mounted high. Any argument left at 0 is unchanged, "
+            "except pitch_lift_deg which is always applied.",
+            PropertyList({Property("dwell_ms", kPropertyTypeInteger, 0, 0, 60000),
+                          Property("yaw_deg", kPropertyTypeInteger, 0, 0, 30),
+                          Property("pitch_lift_deg", kPropertyTypeInteger, 0, -30, 30)}),
+            [this](const PropertyList& properties) -> ReturnValue {
+                cJSON* root = cJSON_CreateObject();
+                if (head_ == nullptr) {
+                    cJSON_AddBoolToObject(root, "ok", false);
+                    cJSON_AddStringToObject(root, "reason", "head controller unavailable");
+                    return root;
+                }
+                const int dwell = properties["dwell_ms"].value<int>();
+                const int yaw = properties["yaw_deg"].value<int>();
+                const int lift = properties["pitch_lift_deg"].value<int>();
+                if (dwell > 0) head_->setScanDwellMs((uint32_t)dwell);
+                if (yaw > 0) head_->setScanAmplitudeDeg((float)yaw);
+                head_->setScanPitchLiftDeg((float)lift);
+
+                const attention::IdleScanConfig cfg = head_->idleScanConfig();
+                cJSON_AddBoolToObject(root, "ok", true);
+                cJSON_AddNumberToObject(root, "dwell_ms", cfg.dwell_ms);
+                cJSON_AddNumberToObject(root, "yaw_deg", cfg.yaw_amplitude_deg);
+                cJSON_AddNumberToObject(root, "pitch_lift_deg", cfg.pitch_lift_deg);
+                return root;
+            });
+
+        mcp_server.AddTool(
             "self.robot.observe_affect",
             "Tell the robot what the person it is talking to sounds like, so "
             "its face can answer. label is one of the pipeline's seven: anger, "

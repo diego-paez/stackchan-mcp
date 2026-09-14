@@ -15,11 +15,18 @@ namespace attention {
 struct MotionConfig {
     // Fraction of the remaining error consumed per second. 2.0 means roughly
     // 86% of the way there in one second. Deliberately unhurried.
-    float approach_per_sec = 2.0f;
+    // Lower is gentler. 2.0 covered 86% of the distance in a second, which
+    // looks like a head snapping to each new station; 0.8 is an unhurried
+    // turn that reads as looking rather than twitching.
+    float approach_per_sec = 0.8f;
 
     // Cruise speed handed to the servo layer. Kept between the smooth floor
     // and something well short of the datasheet maximum.
-    float speed_dps = 80.0f;
+    // 30 deg/s is the gateway's own "low" preset, chosen for slow expressive
+    // motion. It is below stackchan.cc's MIN_SMOOTH_SPEED_DPS, so the SCS0009
+    // will look faintly textured -- which is the right trade for a robot that
+    // should not appear restless.
+    float speed_dps = 30.0f;
 
     // Below this the head is considered to have arrived, and stops being
     // commanded — a servo told to make a 0.2 degree correction forever will

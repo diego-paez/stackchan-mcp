@@ -73,7 +73,10 @@ private:
     // is the one thing this whole layer exists to prevent. The ceiling keeps a
     // tiny correction at a low speed from scheduling a move that outlives
     // several updates and fights the next one.
-    static constexpr uint32_t kMinDurationMs = 40;
+    // Matched to ScheduleConfig::servo_period_ms: a move the board cannot
+    // finish before the next command arrives is a move that gets restarted,
+    // and restarts lose the unfinished fraction to integer rounding.
+    static constexpr uint32_t kMinDurationMs = 110;
     static constexpr uint32_t kMaxDurationMs = 600;
 
     WriteFn write_;
