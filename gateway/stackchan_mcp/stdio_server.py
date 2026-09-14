@@ -1074,6 +1074,24 @@ async def _dispatch_mcp_tool(
             "self.robot.set_touch_sensor_enabled",
             arguments,
         ),
+        # Autonomous head control. See the firmware's
+        # main/boards/stackchan/attention/README.md.
+        "set_attention": (
+            "self.robot.set_attention",
+            arguments,
+        ),
+        "get_attention": (
+            "self.robot.get_attention",
+            {},
+        ),
+        "set_idle_search": (
+            "self.robot.set_idle_search",
+            arguments,
+        ),
+        "observe_affect": (
+            "self.robot.observe_affect",
+            arguments,
+        ),
         "set_avatar": (
             "self.display.set_avatar",
             arguments,
@@ -1739,6 +1757,79 @@ def create_server(notify_config: NotifyConfig | None = None) -> StackChanServer:
                     "the setting persists across reboot."
                 ),
                 inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="set_attention",
+                description=(
+                    "Arm or disarm autonomous head control. Arming runs a "
+                    "slow bounded servo self-test (about 11 s, +/-10 deg yaw "
+                    "and +/-5 deg pitch), then a short greeting, then enables "
+                    "face tracking and the idle search cycle. Nothing moves "
+                    "on its own until this is called. set_head_angles / "
+                    "move_head disarm it: a remote command wins over autonomy."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "True to arm, false to release the head.",
+                        },
+                    },
+                    "required": ["enabled"],
+                },
+            ),
+            Tool(
+                name="get_attention",
+                description=(
+                    "Report autonomous head control state: whether it is "
+                    "armed, how the servo self-test went, what the tracker "
+                    "can see, what the safety filter has intercepted, what "
+                    "the face is doing, and the idle search counters. A "
+                    "detector that silently never sees anyone looks exactly "
+                    "like an empty room unless something is counting."
+                ),
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="set_idle_search",
+                description=(
+                    "Turn the idle search cycle on or off. With it on and "
+                    "nobody in front of the robot, the head sweeps a few "
+                    "stations, pausing at each long enough for the detector "
+                    "to get clean frames; a voice stops the sweep and centres "
+                    "the head; a face hands the head to the tracker."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "enabled": {"type": "boolean"},
+                    },
+                    "required": ["enabled"],
+                },
+            ),
+            Tool(
+                name="observe_affect",
+                description=(
+                    "Tell the robot what the person it is talking to sounds "
+                    "like, so its face can answer. label is one of the "
+                    "pipeline's seven: anger, disgust, fear, happy, neutral, "
+                    "sad, surprise. confidence is 0-100. The robot does not "
+                    "mirror indiscriminately: anger is answered with a "
+                    "thoughtful face, not an angry one."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "confidence": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100,
+                        },
+                    },
+                    "required": ["label", "confidence"],
+                },
             ),
             Tool(
                 name="set_touch_sensor_enabled",
