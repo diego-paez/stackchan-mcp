@@ -21,6 +21,7 @@ from mcp.types import ImageContent, Notification, TextContent, Tool
 
 from . import __version__
 from .gateway import get_gateway
+from .mbot import MBOT_DEVICE_TOOLS, map_mbot_call, mbot_tools
 from .notify_config import NotifyConfig, load_notify_config
 from .user_defaults import resolve_default
 from .stt import listen_and_transcribe
@@ -47,7 +48,10 @@ STACKCHAN_EVENT_INSTRUCTIONS = (
     "Stack-chan physical events arrive as server-initiated "
     "notifications with method='stackchan/event'. Params include "
     "event_type ('touch'), subtype ('tap' or 'stroke'), "
-    "duration_ms, ts, session_id. When such a notification "
+    "duration_ms, ts, session_id. event_type 'mbot' reports the "
+    "mBot2 robot car (subtype ready, done, obstacle, stopped, locked, "
+    "unlocked, button, connected, disconnected; optional detail). "
+    "When such a notification "
     "arrives, react naturally using existing tools "
     "(set_avatar, say, set_mouth, set_leds, move_head). There is "
     "no dedicated reply tool — the existing tool palette is the "
@@ -1197,6 +1201,19 @@ async def _dispatch_mcp_tool(
             arguments,
         ),
     }
+
+    # mbot_* -> self.mbot.*: arguments are checked against the Stacky
+    # safety limits here (and again by the firmware and the mBot).
+    if name in MBOT_DEVICE_TOOLS:
+        try:
+            tool_map[name] = map_mbot_call(name, arguments)
+        except ValueError as exc:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"ok": False, "error": str(exc)}),
+                )
+            ]
 
     if name not in tool_map:
         return [
@@ -2998,6 +3015,8 @@ def create_server(notify_config: NotifyConfig | None = None) -> StackChanServer:
                     "required": ["archive_path", "mode"],
                 },
             ),
+            # Makeblock mBot2 over Stack-chan's BLE link (self.mbot.*).
+            *mbot_tools(),
         ]
 
     @server.call_tool()

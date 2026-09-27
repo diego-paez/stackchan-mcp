@@ -53,9 +53,31 @@ documented-only.
   connection flags. The id changes on every (re)connection, so a polling
   host can detect a device reboot even when the reconnect lands between
   polls and `connected` never reads false.
+- Added `mbot_*` tools (`mbot_status`, `mbot_move`, `mbot_stop`,
+  `mbot_set_led`, `mbot_arm`, `mbot_gripper`, `mbot_home`,
+  `mbot_read_sensors`, `mbot_run_program`) that drive a Makeblock mBot2
+  through Stack-chan's BLE link, with the Stacky safety limits in their
+  input schemas and re-checked in the gateway. `mbot_stop` has its own
+  hardware lane. `stackchan-event` frames with `event_type: "mbot"` and an
+  optional `detail` string are accepted and forwarded. Stacky protocol
+  v1.1 adds `mbot_step`, `mbot_turn`, `mbot_odometry` and `mbot_sync`.
 
 ### Firmware
 
+- Added an experimental 1-to-1 BLE link to a Makeblock mBot2 (CyberPi,
+  Stacky protocol v1) for the stackchan board: NimBLE central only with
+  host memory in PSRAM, F3 upload-message codec, host-side validation and
+  clamping against `components/mbot_link/mbot_limits.h`, one command in
+  flight with ack/retry, `stop` that overtakes pending commands, a
+  heartbeat gated on the gateway WebSocket, `self.mbot.*` MCP tools, mBot
+  events forwarded as `stackchan-event` (`event_type: "mbot"`), and an
+  optional `obstacle` → surprised-face reflex. Enabled by
+  `CONFIG_STACKCHAN_MBOT_LINK` (on in the stackchan build). Stacky
+  protocol v1.1: closed-loop `straight` / `turn` (also as program steps),
+  `odom` and `sync`, `self.mbot.step` / `turn` / `odometry` / `sync`, the
+  latest `odom` and the last `done` events (with the distance and yaw
+  actually travelled) cached on the device, and the link RTT measured.
+  Not yet validated on hardware.
 - Added opt-in, compile-time configurable AXP2101 charge hysteresis for StackChan. The feature is disabled by default; when enabled, startup first allows charging, protection disables it at 70% or above, and charging resumes at 30% or below. An unreadable fuel gauge fails safe to charging enabled. `self.power.set_charge_enabled` and `self.power.get_charge_state` provide manual control and state inspection.
 
 ## [0.17.0] - 2026-07-12

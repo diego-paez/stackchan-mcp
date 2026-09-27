@@ -766,6 +766,14 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     }
 
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
+#if CONFIG_STACKCHAN_MBOT_NO_WAKE_WORD
+    // mBot mode: never create the wake-word engine; its internal RAM is
+    // needed by the BLE controller (see Kconfig STACKCHAN_MBOT_NO_WAKE_WORD).
+    if (enable && !wake_word_initialized_) {
+        ESP_LOGI(TAG, "wake word disabled (mBot mode)");
+        return;
+    }
+#endif
     if (enable) {
         if (!wake_word_initialized_) {
             if (!wake_word_->Initialize(codec_, models_list_)) {

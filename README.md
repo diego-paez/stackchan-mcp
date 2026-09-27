@@ -73,8 +73,21 @@ This repository is a monorepo.
 | `beat_clip_save(seconds?)` | Save the latest rolling beat-mode audio window as a 16 kHz mono WAV temp file and return its path plus actual captured duration. Clip files persist on disk; the caller is responsible for deleting them when no longer needed. | ✅ |
 | `stackchan_follow_pose_stream(action, url, ...)` | Subscribe to an arbitrary external WebSocket pose-stream and drive the head to follow incoming `yaw` / `pitch` frames 1:1 within the SCS0009 working range. `action` switches between `start` / `stop` / `status`. Includes per-axis flip, pitch-center offset, downsample rate cap, angular-velocity clamp, and reconnect with exponential backoff; the initial pose is seeded from the device so the angular-velocity clamp is anchored at the real servo position from the first frame. The upstream server's protocol (zero-offset commands, source dispatching, transport) is intentionally outside this gateway's scope. | ✅ |
 | `stackchan_follow_led_stream(action, url, target, ...)` | Subscribe to an arbitrary external WebSocket LED-frame stream and forward validated `colors` frames to either the built-in 12-LED base ring or a Port B WS2812 strip. `event` frames bypass the rate gate; `continuous` frames are capped by `max_fps`. | ✅ |
+| `mbot_status` | Bluetooth link state of the optional Makeblock mBot2 robot car (connected, battery, locked) plus its safety limits. See [mBot2 over Bluetooth](#7-optional-drive-a-makeblock-mbot2-over-bluetooth). | 🧪 |
+| `mbot_move(direction, speed_percent?, seconds?)` | Drive the mBot2 `forward` / `backward` or turn in place `left` / `right`. `speed_percent` `0..100` (default 40, 100 % = 60 RPM), `seconds` `0.1..5` (default 1). Returns when the mBot accepts; completion arrives as an `mbot` `done` event. | 🧪 |
+| `mbot_stop` | Stop the mBot2 now (wheels, running program, queue). Always accepted, even when the mBot is locked; never queued behind a move. | 🧪 |
+| `mbot_set_led(r, g, b, index?)` | Set the CyberPi LEDs (`0..255` per channel; `index` `all` or `1..5`). | 🧪 |
+| `mbot_arm(position? \| angle?)` | Arm servo (S4): `up` (120°) / `down` (40°) / `home` (90°) or `angle` `40..120`. Glides at 90°/s. | 🧪 |
+| `mbot_gripper(position? \| angle?)` | Gripper servo (S3): `open` (120°) / `close` (45°) / `home` (90°) or `angle` `45..120`. | 🧪 |
+| `mbot_home` | Arm and gripper back to 90°. | 🧪 |
+| `mbot_read_sensors` | Ultrasonic distance (cm), battery %, arm / gripper angle, locked. | 🧪 |
+| `mbot_run_program(steps)` | Run a mini-program such as `"fwd 40 1; led 0 255 0; wait 0.5; arm up"` (steps may also be `straight <cm>` / `turn <deg>`): at most 20 steps and 30 s in total, rejected as a whole if longer. `mbot_stop` aborts it. | 🧪 |
+| `mbot_step(distance_cm, speed_percent?)` | Protocol v1.1: drive straight by a distance, closed-loop on the wheel encoders. `distance_cm` `-30..30` (negative = backwards), `speed_percent` `5..100` (default 30). Returns the command `id` once accepted; a `done` event then reports the distance and yaw actually travelled. | 🧪 |
+| `mbot_turn(degrees, speed_percent?)` | Protocol v1.1: turn in place by an angle, closed-loop on the gyro. `degrees` `-180..180`, positive = left (counter-clockwise). | 🧪 |
+| `mbot_odometry(done_id?, stream_ms?)` | Protocol v1.1: cached pose information — `last_done` (`id`, `reason`, `dist`, `yaw`, `t`), the latest streamed `odom` (`t`, `l`, `r`, `yaw`) and the link `rtt_ms`. `stream_ms` sets the odometry stream period (`0` = off, `100..5000`). Poll it to see when a step has finished. | 🧪 |
+| `mbot_sync` | Protocol v1.1: measure the BLE round trip and the mBot clock offset. | 🧪 |
 
-See `gateway/README.md` for full schemas.
+See `gateway/README.md` for full schemas. 🧪 = experimental: built and unit-tested, not yet validated on a real mBot2.
 
 ## Quick start
 
@@ -869,9 +882,12 @@ Each event is appended as one JSON line to the configured path. The
 file is created if it does not exist, and existing entries are
 preserved. Each line carries:
 
-- `event_type` — top-level event type (currently `"touch"`).
-- `subtype` — subtype within the event type (currently `"tap"` or
-  `"stroke"`).
+- `event_type` — top-level event type (`"touch"`, or `"mbot"` for the
+  optional mBot2 link).
+- `subtype` — subtype within the event type (e.g. `"tap"` or
+  `"stroke"`; see "Supported event subtypes").
+- `detail` — optional free-form detail, present only when the firmware
+  sends one (e.g. the obstacle distance of an `mbot` `obstacle` event).
 - `duration_ms` — firmware-reported duration of the event in
   milliseconds.
 - `ts` — firmware uptime in milliseconds (monotonic).
@@ -928,12 +944,23 @@ releases without rewriting this section.
 | --- | --- | --- | --- |
 | `touch` | `tap` | `head_pat` | `head was tapped` |
 | `touch` | `stroke` | `head_stroke` | `head was stroked for {duration_ms}ms` |
+| `mbot` | `connected` | `mbot_connected` | `the mBot robot car is connected ({detail})` |
+| `mbot` | `disconnected` | `mbot_disconnected` | `the mBot robot car's Bluetooth link was lost` |
+| `mbot` | `ready` | `mbot_ready` | `the mBot program started (version {detail})` |
+| `mbot` | `done` | `mbot_done` | `the mBot finished command {detail}` |
+| `mbot` | `obstacle` | `mbot_obstacle` | `the mBot stopped: obstacle {detail} cm ahead` |
+| `mbot` | `stopped` | `mbot_stopped` | `the mBot stopped ({detail})` |
+| `mbot` | `locked` | `mbot_locked` | `someone pressed the mBot's B button: it stopped and is locked` |
+| `mbot` | `unlocked` | `mbot_unlocked` | `someone pressed the mBot's A button: it is unlocked` |
+| `mbot` | `button` | `mbot_button` | `the mBot's {detail} button was pressed` |
 
 The built-in defaults are phrased experientially — describing what the
 device felt rather than naming a mechanical event — so the consuming
-agent reads them as first-person narration. The `{duration_ms}`
-placeholder is substituted from the event payload; unknown
-placeholders are preserved verbatim.
+agent reads them as first-person narration. The `{duration_ms}` and
+`{detail}` placeholders are substituted from the event payload; unknown
+placeholders are preserved verbatim. `mbot` events come from the
+optional [mBot2 link](#7-optional-drive-a-makeblock-mbot2-over-bluetooth);
+the mBot's periodic `hb` and the `sensors` reply are not forwarded.
 
 ##### Overriding the wording
 
@@ -957,6 +984,66 @@ Both `action` and `template` are required for each overridden subtype.
 The `action` value is forwarded in the event metadata, so keep it
 stable if a downstream consumer keys off it. See `notify.example.yml`
 for the full annotated reference.
+
+### 7. Optional: drive a Makeblock mBot2 over Bluetooth
+
+Stack-chan can drive a [Makeblock mBot2](https://www.makeblock.com/pages/mbot2-coding-robot)
+(CyberPi) as a small robot car, so the LLM can move it by voice:
+LLM → gateway → Stack-chan (Wi-Fi) → **BLE** → mBot2. It is a 1-to-1
+link: Stack-chan is the BLE central, the mBot is the peripheral, and no
+router or PC sits in between.
+
+- **mBot side**: upload the Stacky runtime (Stacky protocol v1, from the
+  companion `mblock-stacky-bridge` project) to the CyberPi in mBlock's
+  upload mode. It enforces the same limits on the mBot and gives the
+  child two buttons that always win: **B = emergency stop + lock**,
+  **A = unlock**.
+- **Firmware**: the `stackchan` build enables NimBLE (central role only,
+  host memory in PSRAM) and `CONFIG_STACKCHAN_MBOT_LINK`. Stack-chan scans
+  for a `Makeblock_LE…` name (only while not connected), connects,
+  reconnects with backoff, and exposes the `self.mbot.*` device tools.
+  To pin one robot, store its address (`AA:BB:CC:DD:EE:FF`) in NVS
+  namespace `mbot`, key `mac`. Builds without an mBot can turn the
+  link off with `CONFIG_STACKCHAN_MBOT_LINK=n` in
+  `sdkconfig.defaults.local`.
+- **Gateway**: the `mbot_*` tools in the tool table above. Events arrive
+  as `event_type: "mbot"` (see "Supported event subtypes").
+- **Local reflex**: an `obstacle` event shows the `surprised` face for a
+  few seconds without an LLM round trip. Disable with
+  `CONFIG_STACKCHAN_MBOT_REFLEXES=n`.
+
+Safety (a child may be playing with it) is enforced in three
+independent layers — the gateway schema and argument check, the
+firmware (`firmware/components/mbot_link/mbot_limits.h`), and the mBot
+runtime:
+
+| Limit | Value |
+|---|---|
+| Wheel speed | `0..100 %` of 60 RPM (about 20 cm/s at 100 %) |
+| One move | `0.1..5 s` |
+| One step / turn (v1.1) | `straight` at most 30 cm, `turn` at most 180°; each ends by itself (target reached, or a timeout of at most 5 s) |
+| Program | at most 20 steps and 30 s in total (moves + waits + step/turn time + about 1 s per servo step), rejected as a whole if longer |
+| Arm (S4) | `40..120°`, home 90° |
+| Gripper (S3) | `45..120°` (45 closed, 120 open), home 90° |
+| Servo speed | glides at 90°/s, never jumps |
+| Obstacle | forward motion auto-stops below 10 cm (mBot ultrasonic sensor) |
+| Watchdog | the mBot stops if it hears nothing (heartbeat or command) for 3 s |
+
+Stack-chan sends a heartbeat every second only while the gateway
+WebSocket is up, so if the LLM side goes away the mBot stops within a
+few seconds. A motion command whose ack is an error or never arrives is
+followed by `stop`, and `stop` overtakes any command still waiting for
+its ack. Moves return as soon as the mBot accepts them, so `mbot_stop`
+is never stuck behind a long motion.
+
+For exploring with a camera (decisions that take seconds), use the
+**stop → look → decide → step** loop from Stacky protocol v1.1: while the
+mBot stands still, look (`take_photo`, `mbot_read_sensors`), decide, send
+one bounded `mbot_step` or `mbot_turn`, then poll `mbot_odometry` until
+`last_done.id` matches the id the step returned. The mBot closes the
+loop on its own encoders and gyro, so a slow decision cannot change how
+far it goes, and `done` reports what it actually did. The high-rate
+`odom` stream is cached on Stack-chan and is not forwarded as events.
 
 ## About the avatar images
 

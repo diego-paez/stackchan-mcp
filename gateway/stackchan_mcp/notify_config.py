@@ -42,6 +42,43 @@ DEFAULT_MESSAGE_TEMPLATES: Final[dict[tuple[str, str], MessageTemplate]] = {
         action="head_stroke",
         template="head was stroked for {duration_ms}ms",
     ),
+    # Makeblock mBot2 over Stack-chan's BLE link (stackchan_mcp.mbot).
+    ("mbot", "connected"): MessageTemplate(
+        action="mbot_connected",
+        template="the mBot robot car is connected ({detail})",
+    ),
+    ("mbot", "disconnected"): MessageTemplate(
+        action="mbot_disconnected",
+        template="the mBot robot car's Bluetooth link was lost",
+    ),
+    ("mbot", "ready"): MessageTemplate(
+        action="mbot_ready",
+        template="the mBot program started (version {detail})",
+    ),
+    ("mbot", "done"): MessageTemplate(
+        action="mbot_done",
+        template="the mBot finished command {detail}",
+    ),
+    ("mbot", "obstacle"): MessageTemplate(
+        action="mbot_obstacle",
+        template="the mBot stopped: obstacle {detail} cm ahead",
+    ),
+    ("mbot", "stopped"): MessageTemplate(
+        action="mbot_stopped",
+        template="the mBot stopped ({detail})",
+    ),
+    ("mbot", "locked"): MessageTemplate(
+        action="mbot_locked",
+        template="someone pressed the mBot's B button: it stopped and is locked",
+    ),
+    ("mbot", "unlocked"): MessageTemplate(
+        action="mbot_unlocked",
+        template="someone pressed the mBot's A button: it is unlocked",
+    ),
+    ("mbot", "button"): MessageTemplate(
+        action="mbot_button",
+        template="the mBot's {detail} button was pressed",
+    ),
 }
 
 

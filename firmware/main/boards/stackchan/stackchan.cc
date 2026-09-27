@@ -32,6 +32,7 @@ static inline bool ServoWritePosOk(int r) { return r > 0; }
 #include "avatar_images.h"
 #include "avatar_set.h"
 #include "avatar_set_fetcher.h"
+#include "mbot_tools.h"
 
 #include <smooth_ui_toolkit.hpp>
 #include <esp_log.h>
@@ -2245,7 +2246,13 @@ private:
     };
 
     void InitializePowerSaveTimer() {
+#if CONFIG_STACKCHAN_MBOT_LINK
+        // Never power off in mBot mode: the 5 min idle shutdown dropped the
+        // gateway and USB whenever the mBot was not linked. Dimming stays.
+        power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
+#else
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
+#endif
         power_save_timer_->OnEnterSleepMode([this]() {
             GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(10);
@@ -7783,6 +7790,16 @@ private:
                 return root;
             });
 
+#if CONFIG_STACKCHAN_MBOT_LINK
+        // self.mbot.*: Makeblock mBot2 over BLE (components/mbot_link).
+        RegisterMbotTools(mcp_server, MbotBoardHooks{
+            [this](const char* face) {
+                SetAvatarExpressionIfActive(face);
+                ScheduleIdleRevert();
+            },
+            [this]() { power_save_timer_->WakeUp(); }});
+#endif
+
         ESP_LOGI(TAG, "StackChan MCP tools registered");
     }
 
@@ -7865,6 +7882,13 @@ public:
         if (level != PowerSaveLevel::LOW_POWER) {
             power_save_timer_->WakeUp();
         }
+#if CONFIG_STACKCHAN_MBOT_LINK
+        // LOW_POWER (MAX_MODEM) sleeps the radio ~1 s at a time, so the
+        // gateway's hello and tool calls stalled and the WebSocket dropped.
+        // PERFORMANCE (PS_NONE) is refused once BLE is running (Wi-Fi/BT
+        // coexistence needs modem sleep). MIN_MODEM wakes on every beacon.
+        level = PowerSaveLevel::BALANCED;
+#endif
         WifiBoard::SetPowerSaveLevel(level);
     }
 

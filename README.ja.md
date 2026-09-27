@@ -73,8 +73,21 @@
 | `beat_clip_save(seconds?)` | 最新の rolling beat-mode 音声を 16 kHz mono WAV の一時ファイルとして保存し、パスと実際に保存できた秒数を返す。clip ファイルはディスクに残るため、不要になったら caller 側で削除してください | ✅ |
 | `stackchan_follow_pose_stream(action, url, ...)` | 任意の外部 WebSocket pose-stream を購読し、 受信した `yaw` / `pitch` フレームに対して 1:1 で首を追従させる（SCS0009 動作範囲内、 yaw ±90°、 pitch 5..85°）。 `action` は `start` / `stop` / `status` を切替。 軸反転、 pitch センター offset、 ダウンサンプル、 角速度クランプ、 exponential backoff 付き reconnect を内包し、 初期姿勢はデバイス側から seed することで初回フレームから角速度クランプが実サーボ位置を基準に効きます。 上流サーバ側のプロトコル（zero-offset コマンド、 ソース選択、 トランスポート）は本 gateway のスコープ外。 | ✅ |
 | `stackchan_follow_led_stream(action, url, target, ...)` | 任意の外部 WebSocket LED-frame stream を購読し、検証済みの `colors` フレームをベース部 12 LED または Port B WS2812 strip に転送する。`event` フレームは rate gate を bypass し、`continuous` フレームは `max_fps` で制限される | ✅ |
+| `mbot_status` | オプションの Makeblock mBot2 ロボットカーとの Bluetooth 接続状態（接続、バッテリー、ロック）と安全上の制限値。[mBot2 を Bluetooth で動かす](#7-オプション-makeblock-mbot2-を-bluetooth-で動かす) 参照 | 🧪 |
+| `mbot_move(direction, speed_percent?, seconds?)` | mBot2 を `forward` / `backward` に走らせる、または `left` / `right` でその場旋回。`speed_percent` は `0..100`（デフォルト 40、100 % = 60 RPM）、`seconds` は `0.1..5`（デフォルト 1）。mBot が受け付けた時点で戻り、完了は `mbot` の `done` イベントで届く | 🧪 |
+| `mbot_stop` | mBot2 を即停止（車輪・実行中プログラム・キュー）。mBot がロック中でも必ず受け付けられ、移動コマンドの後ろに待たされることはない | 🧪 |
+| `mbot_set_led(r, g, b, index?)` | CyberPi の LED 色を設定（各チャンネル `0..255`、`index` は `all` または `1..5`） | 🧪 |
+| `mbot_arm(position? \| angle?)` | アームサーボ (S4): `up` (120°) / `down` (40°) / `home` (90°) または `angle` `40..120`。90°/s でなめらかに動く | 🧪 |
+| `mbot_gripper(position? \| angle?)` | グリッパーサーボ (S3): `open` (120°) / `close` (45°) / `home` (90°) または `angle` `45..120` | 🧪 |
+| `mbot_home` | アームとグリッパーを 90° に戻す | 🧪 |
+| `mbot_read_sensors` | 超音波センサーの距離 (cm)、バッテリー %、アーム / グリッパー角度、ロック状態 | 🧪 |
+| `mbot_run_program(steps)` | `"fwd 40 1; led 0 255 0; wait 0.5; arm up"` のようなミニプログラムを実行（ステップには `straight <cm>` / `turn <deg>` も使える）。最大 20 ステップ・合計 30 秒で、超える場合は丸ごと拒否。`mbot_stop` で中断できる | 🧪 |
+| `mbot_step(distance_cm, speed_percent?)` | プロトコル v1.1: 車輪エンコーダーで閉ループ制御し、指定距離だけ直進。`distance_cm` は `-30..30`（負で後退）、`speed_percent` は `5..100`（デフォルト 30）。受け付けられるとコマンド `id` を返し、その後 `done` イベントで実際に進んだ距離と向きの変化が届く | 🧪 |
+| `mbot_turn(degrees, speed_percent?)` | プロトコル v1.1: ジャイロで閉ループ制御し、その場で指定角度だけ旋回。`degrees` は `-180..180`、正で左回り（反時計回り） | 🧪 |
+| `mbot_odometry(done_id?, stream_ms?)` | プロトコル v1.1: キャッシュされた位置情報 — `last_done`（`id`、`reason`、`dist`、`yaw`、`t`）、最新のストリーム `odom`（`t`、`l`、`r`、`yaw`）、接続の `rtt_ms`。`stream_ms` でオドメトリ送信間隔を設定（`0` = 停止、`100..5000`）。ステップの完了確認はこれをポーリングする | 🧪 |
+| `mbot_sync` | プロトコル v1.1: BLE の往復時間と mBot の時計のずれを測る | 🧪 |
 
-詳細スキーマは `gateway/README.md` 参照。
+詳細スキーマは `gateway/README.md` 参照。🧪 = 実験的: ビルドと単体テストは済んでいるが、実機 mBot2 での検証はまだ。
 
 ## クイックスタート
 
@@ -801,9 +814,12 @@ jsonl:
 ファイルが存在しない場合は作成され、既存のエントリは保持されます。
 1 行に含まれる field:
 
-- `event_type` — top-level event type（現状は `"touch"`）。
-- `subtype` — event type 内の subtype（現状は `"tap"` または
-  `"stroke"`）。
+- `event_type` — top-level event type（`"touch"`、またはオプションの
+  mBot2 連携では `"mbot"`）。
+- `subtype` — event type 内の subtype（例: `"tap"` や `"stroke"`。
+  「Supported event subtypes」参照）。
+- `detail` — 任意の自由形式の詳細。firmware が送ったときだけ含まれる
+  （例: `mbot` の `obstacle` イベントの障害物までの距離）。
 - `duration_ms` — firmware が報告したイベントの継続時間（ミリ秒）。
 - `ts` — firmware uptime（ミリ秒、monotonic）。
 - `ts_unix` — gateway がイベントを記録した壁時計時刻。
@@ -857,12 +873,23 @@ legacy notification には含まれません）。受信側の notification の
 | --- | --- | --- | --- |
 | `touch` | `tap` | `head_pat` | `head was tapped` |
 | `touch` | `stroke` | `head_stroke` | `head was stroked for {duration_ms}ms` |
+| `mbot` | `connected` | `mbot_connected` | `the mBot robot car is connected ({detail})` |
+| `mbot` | `disconnected` | `mbot_disconnected` | `the mBot robot car's Bluetooth link was lost` |
+| `mbot` | `ready` | `mbot_ready` | `the mBot program started (version {detail})` |
+| `mbot` | `done` | `mbot_done` | `the mBot finished command {detail}` |
+| `mbot` | `obstacle` | `mbot_obstacle` | `the mBot stopped: obstacle {detail} cm ahead` |
+| `mbot` | `stopped` | `mbot_stopped` | `the mBot stopped ({detail})` |
+| `mbot` | `locked` | `mbot_locked` | `someone pressed the mBot's B button: it stopped and is locked` |
+| `mbot` | `unlocked` | `mbot_unlocked` | `someone pressed the mBot's A button: it is unlocked` |
+| `mbot` | `button` | `mbot_button` | `the mBot's {detail} button was pressed` |
 
 組み込みのデフォルトは「機械的なイベント名」ではなく「デバイスが
 何を感じたか」を表す体験的な表現にしてあり、受信側のエージェントが
 一人称のナレーションとして読めるようになっています。`{duration_ms}`
-プレースホルダは event payload から置換され、未知のプレースホルダは
-そのまま保持されます。
+と `{detail}` プレースホルダは event payload から置換され、未知の
+プレースホルダはそのまま保持されます。`mbot` イベントはオプションの
+[mBot2 連携](#7-オプション-makeblock-mbot2-を-bluetooth-で動かす) から
+届きます。mBot の定期的な `hb` と `sensors` の応答は転送しません。
 
 ##### 文言の上書き
 
@@ -887,6 +914,68 @@ messages:
 `action` の値はイベントの metadata に転送されるため、下流の consumer
 がそれを key にしている場合は安定させておいてください。詳細な注釈
 付きリファレンスは `notify.example.yml` を参照してください。
+
+### 7. オプション: Makeblock mBot2 を Bluetooth で動かす
+
+Stack-chan は [Makeblock mBot2](https://www.makeblock.com/pages/mbot2-coding-robot)
+(CyberPi) を小さなロボットカーとして操縦でき、LLM から声で動かせます:
+LLM → gateway → Stack-chan (Wi-Fi) → **BLE** → mBot2。1 対 1 の接続で、
+Stack-chan が BLE セントラル、mBot がペリフェラルです。間にルーターや
+PC は入りません。
+
+- **mBot 側**: 姉妹プロジェクト `mblock-stacky-bridge` の Stacky
+  ランタイム（Stacky protocol v1）を、mBlock のアップロードモードで
+  CyberPi に書き込みます。mBot 上でも同じ制限をかけ、子どもが必ず
+  優先できる 2 つのボタンを用意します: **B = 非常停止 + ロック**、
+  **A = ロック解除**。
+- **ファームウェア**: `stackchan` ビルドでは NimBLE（セントラル役のみ、
+  ホストのメモリは PSRAM）と `CONFIG_STACKCHAN_MBOT_LINK` が有効です。
+  Stack-chan は `Makeblock_LE…` という名前を（未接続のときだけ）
+  スキャンして接続し、切れたらバックオフ付きで再接続し、
+  `self.mbot.*` デバイスツールを公開します。特定の 1 台に固定したい
+  場合は、そのアドレス（`AA:BB:CC:DD:EE:FF`）を NVS の namespace
+  `mbot`、key `mac` に保存してください。mBot を使わないビルドでは
+  `sdkconfig.defaults.local` に `CONFIG_STACKCHAN_MBOT_LINK=n` を書けば
+  無効にできます。
+- **ゲートウェイ**: 上のツール一覧の `mbot_*` ツール。イベントは
+  `event_type: "mbot"` で届きます（「Supported event subtypes」参照）。
+- **ローカル反射**: `obstacle` イベントで、LLM を介さずに数秒間
+  `surprised` の顔を表示します。`CONFIG_STACKCHAN_MBOT_REFLEXES=n` で
+  無効化できます。
+
+安全性（子どもが遊ぶことを想定）は 3 つの独立した層で守られます —
+ゲートウェイのスキーマと引数チェック、ファームウェア
+（`firmware/components/mbot_link/mbot_limits.h`）、そして mBot の
+ランタイムです:
+
+| 制限 | 値 |
+|---|---|
+| 車輪の速度 | 60 RPM の `0..100 %`（100 % で約 20 cm/s） |
+| 1 回の移動 | `0.1..5 秒` |
+| 1 回のステップ / 旋回 (v1.1) | `straight` は最大 30 cm、`turn` は最大 180°。それぞれ自分で終わる（目標到達、または最大 5 秒のタイムアウト） |
+| プログラム | 最大 20 ステップ・合計 30 秒（移動 + wait + step/turn の時間 + サーボ 1 ステップあたり約 1 秒）。超える場合は丸ごと拒否 |
+| アーム (S4) | `40..120°`、ホーム 90° |
+| グリッパー (S3) | `45..120°`（45 で閉、120 で開）、ホーム 90° |
+| サーボ速度 | 90°/s でなめらかに動き、跳ばない |
+| 障害物 | 前進中、10 cm 未満で自動停止（mBot の超音波センサー） |
+| ウォッチドッグ | 3 秒間なにも（ハートビートもコマンドも）届かないと mBot が停止 |
+
+Stack-chan は gateway の WebSocket がつながっている間だけ毎秒
+ハートビートを送るので、LLM 側がいなくなると mBot は数秒以内に
+止まります。移動コマンドの ack がエラーだった、あるいは届かなかった
+場合は続けて `stop` を送り、`stop` は ack 待ちのコマンドを追い越します。
+移動コマンドは mBot が受け付けた時点で戻るので、`mbot_stop` が長い
+移動の後ろで待たされることはありません。
+
+カメラを使った探索（判断に数秒かかる場合）では、Stacky プロトコル
+v1.1 の **止まる → 見る → 決める → 1 歩進む** ループを使います: mBot が
+止まっている間に見て（`take_photo`、`mbot_read_sensors`）、決めて、
+範囲の決まった `mbot_step` か `mbot_turn` を 1 回だけ送り、ステップが
+返した id と `last_done.id` が一致するまで `mbot_odometry` を
+ポーリングします。mBot は自分のエンコーダーとジャイロで閉ループ制御
+するので、判断が遅くても進む距離は変わらず、`done` が実際の動きを
+報告します。高頻度の `odom` ストリームは Stack-chan にキャッシュされ、
+イベントとしては転送しません。
 
 ## アバター画像について
 

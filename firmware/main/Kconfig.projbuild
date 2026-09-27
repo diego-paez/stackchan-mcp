@@ -1179,6 +1179,41 @@ config STACKCHAN_AUTO_TORQUE_RELEASE_MS
         Runtime-overridable via the set_auto_torque_release MCP tool
         (session override, not persisted across reboot).
 
+config STACKCHAN_MBOT_LINK
+    bool "mBot2 (CyberPi) BLE link and self.mbot.* MCP tools"
+    default n
+    depends on BT_NIMBLE_ENABLED && BT_NIMBLE_ROLE_CENTRAL && BT_NIMBLE_ROLE_OBSERVER && BT_NIMBLE_GATT_CLIENT
+    help
+        Drive a Makeblock mBot2 running the Stacky runtime over a 1-to-1
+        BLE link (NimBLE central; Stacky protocol v1). Adds the
+        self.mbot.* MCP tools and forwards mBot events to the gateway as
+        stackchan-event frames with event_type "mbot". Sources live in
+        firmware/components/mbot_link/ (MIT). The stackchan build in
+        main/boards/stackchan/config.json enables NimBLE and this option.
+        Optionally pin one robot by writing its address ("AA:BB:CC:DD:EE:FF")
+        to NVS namespace "mbot", key "mac".
+
+config STACKCHAN_MBOT_REFLEXES
+    bool "Local avatar reflexes for mBot events"
+    default y
+    depends on STACKCHAN_MBOT_LINK
+    help
+        Small on-device reactions that do not need the LLM: an mBot
+        "obstacle" event shows the surprised face for a few seconds.
+        Disable to leave the face entirely to the LLM.
+
+config STACKCHAN_MBOT_NO_WAKE_WORD
+    bool "mBot mode: skip the on-device wake word to make room for BLE"
+    default y
+    depends on STACKCHAN_MBOT_LINK
+    help
+        The BLE controller needs ~35 KB of internal SRAM, which the CoreS3
+        does not have once Wi-Fi, activation TLS and the AFE wake-word
+        engine are all up (measured 2026-09-26: esp_bt_controller_init
+        failed with ESP_ERR_NO_MEM). With this option the wake-word engine
+        is never created, so "Hi Stack-chan" does not wake the device;
+        voice still works through the gateway's listen() and head touch.
+
 endif # BOARD_TYPE_STACKCHAN
 
 endmenu

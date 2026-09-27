@@ -61,6 +61,7 @@ def log_event(
     action: str | None = None,
     path: Path | None = None,
     ts_unix: float | None = None,
+    detail: str | None = None,
 ) -> None:
     """Append a single stackchan event to the JSONL log.
 
@@ -80,6 +81,9 @@ def log_event(
     ts_unix
         Optional override for the wall-clock timestamp. Defaults to
         ``time.time()`` at append time. Exposed for tests.
+    detail
+        Optional free-form event detail (for example the obstacle distance
+        of an ``mbot`` event). Omitted from the line when ``None``.
 
     Errors are logged at WARNING and swallowed; the MCP notification
     path continues regardless of disk outcome.
@@ -99,6 +103,8 @@ def log_event(
     }
     if action is not None:
         line["action"] = action
+    if detail is not None:
+        line["detail"] = detail
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:

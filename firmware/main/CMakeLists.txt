@@ -875,6 +875,20 @@ if(CONFIG_BOARD_TYPE_STACKCHAN)
     # one level deep and would not see it.
     file(GLOB STACKCHAN_AVATAR_SOURCES ${STACKCHAN_BOARD_DIR}/avatar/*.cc)
     list(APPEND BOARD_SOURCES ${STACKCHAN_AVATAR_SOURCES})
+
+    # mBot2 BLE link (MIT, firmware/components/mbot_link/). Pulled into
+    # main's build for the same MINIMAL_BUILD reason as feetech_scs above.
+    # The board-side tools (boards/stackchan/mbot_tools.cc) come in through
+    # the board glob and compile to nothing when the option is off.
+    if(CONFIG_STACKCHAN_MBOT_LINK)
+        set(MBOT_LINK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../components/mbot_link")
+        list(APPEND BOARD_SOURCES
+            "${MBOT_LINK_DIR}/f3_codec.cc"
+            "${MBOT_LINK_DIR}/mbot_command.cc"
+            "${MBOT_LINK_DIR}/mbot_link.cc")
+        list(APPEND INCLUDE_DIRS "${MBOT_LINK_DIR}")
+        message(STATUS "StackChan: mBot2 BLE link enabled")
+    endif()
     list(APPEND INCLUDE_DIRS ${STACKCHAN_BOARD_DIR})
 endif()
 list(APPEND SOURCES ${BOARD_SOURCES})

@@ -173,3 +173,28 @@ gtest_discover_tests(face_layout_test)
 # mouth mask the panel draws, so the face can be judged without a robot.
 add_executable(sim_face sim_face.cc)
 target_include_directories(sim_face PRIVATE ../main/boards/stackchan)
+
+# --- mBot2 BLE link ---------------------------------------------------------
+# F3 codec (byte-compared with the Python reference codec) and the host-side
+# command validation that enforces mbot_limits.h. The NimBLE part is not
+# built here. cJSON is the same library ESP-IDF ships (components/json).
+FetchContent_Declare(
+    cjson
+    GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+    GIT_TAG v1.7.18
+    # Download only: cJSON's own CMakeLists builds far more than we need.
+    SOURCE_SUBDIR do-not-configure
+)
+FetchContent_MakeAvailable(cjson)
+enable_language(C)
+add_library(host_cjson STATIC ${cjson_SOURCE_DIR}/cJSON.c)
+target_include_directories(host_cjson PUBLIC ${cjson_SOURCE_DIR})
+
+add_executable(mbot_link_test
+    test_mbot_link.cc
+    ../components/mbot_link/f3_codec.cc
+    ../components/mbot_link/mbot_command.cc
+)
+target_include_directories(mbot_link_test PRIVATE ../components/mbot_link)
+target_link_libraries(mbot_link_test PRIVATE host_cjson GTest::gtest_main)
+gtest_discover_tests(mbot_link_test)

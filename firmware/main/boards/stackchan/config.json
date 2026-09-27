@@ -13,7 +13,31 @@
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_stackchan.csv\"",
                 "CONFIG_STACKCHAN_FACE_DETECT=y",
                 "CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=n",
-                "CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y"
+                "CONFIG_SR_WN_WN9_HISTACKCHAN_TTS3=y",
+                "CONFIG_BT_ENABLED=y",
+                "CONFIG_BT_NIMBLE_ENABLED=y",
+                "CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y",
+                "CONFIG_BT_NIMBLE_ROLE_CENTRAL=y",
+                "CONFIG_BT_NIMBLE_ROLE_OBSERVER=y",
+                "CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n",
+                "CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n",
+                "CONFIG_BT_NIMBLE_GATT_CLIENT=y",
+                "CONFIG_BT_NIMBLE_GATT_SERVER=n",
+                "CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1",
+                "CONFIG_BT_NIMBLE_MAX_BONDS=1",
+                "CONFIG_BT_NIMBLE_MAX_CCCDS=1",
+                "CONFIG_BT_NIMBLE_SECURITY_ENABLE=n",
+                "CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n",
+                "CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n",
+                "CONFIG_BT_NIMBLE_HS_FLOW_CTRL=y",
+                "CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512",
+                "CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=5120",
+                "CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y",
+                "CONFIG_BT_CTRL_BLE_MAX_ACT=3",
+                "CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y",
+                "CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y",
+                "CONFIG_STACKCHAN_MBOT_LINK=y",
+                "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n"
             ]
         }
     ]

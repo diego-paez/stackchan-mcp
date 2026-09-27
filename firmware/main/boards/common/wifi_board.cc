@@ -23,8 +23,9 @@
 
 static const char *TAG = "WifiBoard";
 
-// Connection timeout in seconds
-static constexpr int CONNECT_TIMEOUT_SEC = 60;
+// Connection timeout in seconds. 60 s was too short for a router that rejects the
+// first logins: the retries used it up and the board dropped into the setup hotspot.
+static constexpr int CONNECT_TIMEOUT_SEC = 300;
 
 WifiBoard::WifiBoard() {
     // Create connection timeout timer

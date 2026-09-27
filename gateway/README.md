@@ -199,8 +199,34 @@ PY32 I2C bus with the servo-power and Si12T touch paths. If the PY32
 init fails at boot, the LED tools degrade with `available=false`
 instead of cascading errors.
 
+### mBot2 tools (optional, Makeblock mBot2 over Stack-chan's BLE link)
+
+| Tool | Device tool | Arguments and limits |
+|---|---|---|
+| `mbot_status` | `self.mbot.status` | none. Returns `connected`, `state`, `name`, `address`, `battery_percent`, `locked`, `limits`. |
+| `mbot_move` | `self.mbot.move` | `direction` `forward` / `backward` / `left` / `right` (required); `speed_percent` integer `0..100` (default 40, % of 60 RPM); `seconds` number `0.1..5` (default 1), sent to the device as `duration_ms`. |
+| `mbot_stop` | `self.mbot.stop` | none. Always accepted; runs on its own `mbot_stop` lane so it is never queued behind a move. |
+| `mbot_set_led` | `self.mbot.set_led` | `r`, `g`, `b` integers `0..255` (required); `index` `"all"` (default) or `1..5`. |
+| `mbot_arm` | `self.mbot.arm` | `position` `up` / `down` / `home`, **or** `angle` integer `40..120`. |
+| `mbot_gripper` | `self.mbot.gripper` | `position` `open` / `close` / `home`, **or** `angle` integer `45..120` (45 closed, 120 open). |
+| `mbot_home` | `self.mbot.home` | none. Arm and gripper to 90°. |
+| `mbot_read_sensors` | `self.mbot.read_sensors` | none. Returns `distance_cm` (null without an ultrasonic sensor), `battery_percent`, `arm_deg`, `gripper_deg`, `locked`. |
+| `mbot_step` | `self.mbot.step` | `distance_cm` integer `-30..30` (required, negative = backwards); `speed_percent` integer `5..100` (default 30). Returns `{ok, id, detail, ...}` with `id` as a string; completion is an `mbot` `done` event. |
+| `mbot_turn` | `self.mbot.turn` | `degrees` integer `-180..180` (required, positive = left / CCW); `speed_percent` integer `5..100` (default 30). Same result shape as `mbot_step`. |
+| `mbot_odometry` | `self.mbot.odometry` | `done_id` integer `1..9999` (optional); `stream_ms` integer `0` or `100..5000` (optional). Returns `{connected, last_done: {id, reason, dist, yaw, t} \| null, done?, odom: {t, l, r, yaw} \| null, rtt_ms}`. |
+| `mbot_sync` | `self.mbot.sync` | none. Returns `host_ms`, `mbot_ms`, `rtt_ms`, `offset_ms`. |
+| `mbot_run_program` | `self.mbot.run_program` | `steps` string (max 440 characters, max 20 `;`-separated steps, 30 s total), e.g. `"fwd 40 1; led 0 255 0; wait 0.5; arm up"`. |
+
+Arguments outside these limits are rejected by the gateway
+(`stackchan_mcp/mbot.py`) before anything is sent; the firmware
+(`firmware/components/mbot_link/`) validates and clamps again, and the
+mBot runtime clamps a third time. Tools return once the mBot has
+acknowledged the command; motions finish later with an `mbot` / `done`
+stackchan-event. All `self.mbot.*` calls except stop share the `mbot`
+lane.
+
 The mapping from these names to ESP32-side `self.*` MCP tools is in
-`stackchan_mcp/stdio_server.py`.
+`stackchan_mcp/stdio_server.py` (mBot tools: `stackchan_mcp/mbot.py`).
 
 ## Architecture
 
@@ -210,6 +236,7 @@ stackchan_mcp/
 ├── gateway.py          # singleton orchestrator
 ├── stdio_server.py     # MCP client side (stdio MCP server)
 ├── esp32_client.py     # ESP32 side (WebSocket MCP client + auth)
+├── mbot.py             # mbot_* tools: schemas, limits, mapping to self.mbot.*
 ├── capture_server.py   # HTTP /capture endpoint for photo uploads
 ├── server.py           # legacy local WS test server (unused in prod)
 ├── mcp_router.py       # legacy local stub router (unused in prod)

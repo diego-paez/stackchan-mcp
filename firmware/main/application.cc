@@ -432,6 +432,14 @@ void Application::CheckNewVersion() {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
                 return;
             }
+            // The local gateway does not need the upstream OTA server. When a
+            // gateway URL is saved, one failure is enough: retrying with
+            // doubling delays kept the gateway waiting for many minutes
+            // whenever api.tenclass.net was slow to reach.
+            if (!Settings("websocket", false).GetString("url").empty()) {
+                ESP_LOGW(TAG, "Version check failed (%d); gateway URL set, continuing without it", err);
+                return;
+            }
 
             char error_message[128];
             snprintf(error_message, sizeof(error_message), "code=%d, url=%s", err, ota_->GetCheckVersionUrl().c_str());
@@ -1277,9 +1285,14 @@ void Application::SendMcpMessage(const std::string& payload) {
 
 void Application::SendStackChanEvent(
     const char* event_type, const char* subtype, uint64_t duration_ms) {
+    SendStackChanEvent(event_type, subtype, duration_ms, std::string());
+}
+
+void Application::SendStackChanEvent(
+    const char* event_type, const char* subtype, uint64_t duration_ms, const std::string& detail) {
     std::string event_type_str = event_type ? event_type : "";
     std::string subtype_str = subtype ? subtype : "";
-    Schedule([this, event_type_str, subtype_str, duration_ms]() {
+    Schedule([this, event_type_str, subtype_str, duration_ms, detail]() {
         if (!protocol_ || !protocol_->IsTransportConnected()) {
             return;
         }
@@ -1294,6 +1307,9 @@ void Application::SendStackChanEvent(
         cJSON_AddStringToObject(root, "subtype", subtype_str.c_str());
         cJSON_AddNumberToObject(root, "duration_ms", static_cast<double>(duration_ms));
         cJSON_AddNumberToObject(root, "ts", static_cast<double>(esp_timer_get_time() / 1000ULL));
+        if (!detail.empty()) {
+            cJSON_AddStringToObject(root, "detail", detail.c_str());
+        }
 
         char* str = cJSON_PrintUnformatted(root);
         if (str != nullptr) {

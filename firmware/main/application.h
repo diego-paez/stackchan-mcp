@@ -114,6 +114,11 @@ public:
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SendStackChanEvent(const char* event_type, const char* subtype, uint64_t duration_ms);
+    // Same frame with an extra free-form "detail" string (omitted when
+    // empty). Used by the mBot link, e.g. event_type "mbot", subtype
+    // "obstacle", detail "7".
+    void SendStackChanEvent(const char* event_type, const char* subtype, uint64_t duration_ms,
+                            const std::string& detail);
 
     // Phase 4.5 avatar: thread-safe generic WS text frame send.
     // Wraps Protocol::SendText through the main-task Schedule for the

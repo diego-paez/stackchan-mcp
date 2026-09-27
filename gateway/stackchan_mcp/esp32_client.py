@@ -41,6 +41,7 @@ from .notify_config import (
     load_notify_config,
     render_template,
 )
+from .mbot import MBOT_EVENT_SUBTYPES
 from .protocol import HelloResponse, make_mcp_message, parse_jsonrpc_response
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,21 @@ _TOOL_LANES = {
     "self.camera.": "camera",
     "self.touch.": "touch",
     "self.get_device_status": "status",
+    # mBot2 over BLE. stop has its own lane (and must stay listed before the
+    # "self.mbot." prefix: first match wins) so it is never queued behind a
+    # move. Moves only wait for the mBot's ack, not for the motion to end.
+    "self.mbot.stop": "mbot_stop",
+    "self.mbot.": "mbot",
 }
+
+
+#: Accepted ``stackchan-event`` event types and their subtypes.
+_STACKCHAN_EVENT_SUBTYPES: dict[str, frozenset[str]] = {
+    "touch": frozenset({"tap", "stroke"}),
+    "mbot": MBOT_EVENT_SUBTYPES,
+}
+#: Upper bound for the optional free-form ``detail`` string.
+_STACKCHAN_EVENT_DETAIL_MAX = 128
 
 
 def _hardware_lane(tool_name: str) -> str:
@@ -533,6 +548,8 @@ class ESP32Manager:
             "camera": asyncio.Lock(),
             "touch": asyncio.Lock(),
             "status": asyncio.Lock(),
+            "mbot": asyncio.Lock(),
+            "mbot_stop": asyncio.Lock(),
             "default": asyncio.Lock(),
         }
 
@@ -1039,11 +1056,19 @@ class ESP32Manager:
         ts = payload.get("ts")
         session_id = payload.get("session_id")
 
-        if event_type != "touch":
+        detail = payload.get("detail")
+
+        allowed_subtypes = _STACKCHAN_EVENT_SUBTYPES.get(event_type)
+        if allowed_subtypes is None:
             logger.warning("Malformed stackchan-event frame: event_type=%r", event_type)
             return
-        if subtype not in {"tap", "stroke"}:
+        if subtype not in allowed_subtypes:
             logger.warning("Malformed stackchan-event frame: subtype=%r", subtype)
+            return
+        if detail is not None and (
+            not isinstance(detail, str) or len(detail) > _STACKCHAN_EVENT_DETAIL_MAX
+        ):
+            logger.warning("Malformed stackchan-event frame: detail=%r", detail)
             return
         if (
             isinstance(duration_ms, bool)
@@ -1076,6 +1101,8 @@ class ESP32Manager:
             "ts": ts,
             "ts_unix": ts_unix,
             "session_id": session_id,
+            # Always present for templates ("{detail}"); empty when absent.
+            "detail": detail or "",
         }
         legacy_params = {
             "event_type": event_type,
@@ -1085,6 +1112,8 @@ class ESP32Manager:
             "ts": ts,
             "session_id": session_id,
         }
+        if detail:
+            legacy_params["detail"] = detail
         logger.info(
             "stackchan-event: %s/%s action=%s duration=%sms ts=%s session=%s",
             event_type,
@@ -1124,6 +1153,8 @@ class ESP32Manager:
                 "ts_unix": str(ts_unix),
                 "session_id": session_id,
             }
+            if detail:
+                channel_meta["detail"] = detail
             await notify_stackchan_event(
                 "notifications/claude/channel",
                 {"content": content, "meta": channel_meta},
@@ -1135,6 +1166,7 @@ class ESP32Manager:
             # helper bug cannot break the in-band notification paths above.
             from .event_log import log_event
 
+            extra: dict[str, Any] = {"detail": detail} if detail else {}
             try:
                 log_event(
                     event_type=event_type,
@@ -1145,6 +1177,7 @@ class ESP32Manager:
                     action=message.action,
                     path=config.jsonl_path,
                     ts_unix=ts_unix,
+                    **extra,
                 )
             except Exception as exc:  # pragma: no cover - defensive guard
                 logger.warning(
