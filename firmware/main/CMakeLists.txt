@@ -885,7 +885,8 @@ if(CONFIG_BOARD_TYPE_STACKCHAN)
         list(APPEND BOARD_SOURCES
             "${MBOT_LINK_DIR}/f3_codec.cc"
             "${MBOT_LINK_DIR}/mbot_command.cc"
-            "${MBOT_LINK_DIR}/mbot_link.cc")
+            "${MBOT_LINK_DIR}/mbot_link.cc"
+            "${MBOT_LINK_DIR}/teleop_packet.cc")
         list(APPEND INCLUDE_DIRS "${MBOT_LINK_DIR}")
         message(STATUS "StackChan: mBot2 BLE link enabled")
     endif()

@@ -41,8 +41,8 @@ def test_limits_mirror_protocol_table():
     assert mbot.MBOT_MAX_MOVE_S == 5.0
     assert mbot.MBOT_MAX_PROG_S == 30.0
     assert mbot.MBOT_MAX_PROG_STEPS == 20
-    assert (mbot.MBOT_ARM_MIN, mbot.MBOT_ARM_MAX, mbot.MBOT_ARM_HOME) == (40, 120, 90)
-    assert (mbot.MBOT_GRIP_MIN, mbot.MBOT_GRIP_MAX, mbot.MBOT_GRIP_HOME) == (45, 120, 90)
+    assert (mbot.MBOT_ARM_MIN, mbot.MBOT_ARM_MAX, mbot.MBOT_ARM_HOME) == (45, 115, 90)
+    assert (mbot.MBOT_GRIP_MIN, mbot.MBOT_GRIP_MAX, mbot.MBOT_GRIP_HOME) == (50, 115, 90)
     assert mbot.MBOT_OBSTACLE_CM == 10
     assert mbot.MBOT_WATCHDOG_S == 3.0
     assert mbot.MBOT_MAX_STEP_CM == 30
@@ -63,13 +63,13 @@ def test_firmware_limits_header_matches_gateway():
         "MBOT_MAX_MOVE_S": "5.0",
         "MBOT_MAX_PROG_S": "30.0",
         "MBOT_MAX_PROG_STEPS": "20",
-        "MBOT_ARM_MIN": "40",
-        "MBOT_ARM_MAX": "120",
+        "MBOT_ARM_MIN": "45",
+        "MBOT_ARM_MAX": "115",
         "MBOT_ARM_HOME": "90",
-        "MBOT_GRIP_MIN": "45",
-        "MBOT_GRIP_MAX": "120",
+        "MBOT_GRIP_MIN": "50",
+        "MBOT_GRIP_MAX": "115",
         "MBOT_GRIP_HOME": "90",
-        "MBOT_SERVO_DEG_PER_S": "90",
+        "MBOT_SERVO_DEG_PER_S": "40",
         "MBOT_OBSTACLE_CM": "10",
         "MBOT_WATCHDOG_S": "3.0",
         "MBOT_HB_PERIOD_S": "1.0",
@@ -111,11 +111,11 @@ async def test_mbot_schemas_carry_the_safety_limits():
     assert move["properties"]["seconds"]["maximum"] == 5.0
 
     arm = tools["mbot_arm"].inputSchema["properties"]
-    assert arm["angle"]["minimum"] == 40 and arm["angle"]["maximum"] == 120
+    assert arm["angle"]["minimum"] == 45 and arm["angle"]["maximum"] == 115
     assert arm["position"]["enum"] == ["up", "down", "home"]
 
     grip = tools["mbot_gripper"].inputSchema["properties"]
-    assert grip["angle"]["minimum"] == 45 and grip["angle"]["maximum"] == 120
+    assert grip["angle"]["minimum"] == 50 and grip["angle"]["maximum"] == 115
     assert grip["position"]["enum"] == ["open", "close", "home"]
 
     led = tools["mbot_set_led"].inputSchema
@@ -215,9 +215,9 @@ async def _call(name, arguments):
         ("mbot_set_led", {"r": 0, "g": 255, "b": 0}, {"r": 0, "g": 255, "b": 0, "index": "all"}),
         ("mbot_set_led", {"r": 1, "g": 2, "b": 3, "index": 5}, {"r": 1, "g": 2, "b": 3, "index": "5"}),
         ("mbot_arm", {"position": "up"}, {"position": "up"}),
-        ("mbot_arm", {"angle": 40}, {"angle": 40}),
+        ("mbot_arm", {"angle": 45}, {"angle": 45}),
         ("mbot_gripper", {"position": "close"}, {"position": "close"}),
-        ("mbot_gripper", {"angle": 120}, {"angle": 120}),
+        ("mbot_gripper", {"angle": 115}, {"angle": 115}),
         ("mbot_sync", {}, {}),
         ("mbot_step", {"distance_cm": 20}, {"distance_cm": 20, "speed_percent": 30}),
         (

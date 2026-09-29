@@ -25,11 +25,11 @@ MBOT_MAX_MOVE_S: Final = 5.0
 MBOT_MIN_MOVE_S: Final = 0.1
 MBOT_MAX_PROG_S: Final = 30.0
 MBOT_MAX_PROG_STEPS: Final = 20
-MBOT_ARM_MIN: Final = 40
-MBOT_ARM_MAX: Final = 120
+MBOT_ARM_MIN: Final = 45
+MBOT_ARM_MAX: Final = 115
 MBOT_ARM_HOME: Final = 90
-MBOT_GRIP_MIN: Final = 45
-MBOT_GRIP_MAX: Final = 120
+MBOT_GRIP_MIN: Final = 50
+MBOT_GRIP_MAX: Final = 115
 MBOT_GRIP_HOME: Final = 90
 MBOT_OBSTACLE_CM: Final = 10
 MBOT_WATCHDOG_S: Final = 3.0
@@ -192,7 +192,7 @@ def mbot_tools() -> list[Tool]:
             description=(
                 f"Move the mBot2 arm (servo S4). Give position (up = {MBOT_ARM_MAX}, "
                 f"down = {MBOT_ARM_MIN}, home = {MBOT_ARM_HOME} deg) or angle "
-                f"{MBOT_ARM_MIN}-{MBOT_ARM_MAX}, not both. It glides at 90 deg/s."
+                f"{MBOT_ARM_MIN}-{MBOT_ARM_MAX}, not both. It glides at 40 deg/s."
             ),
             inputSchema={
                 "type": "object",
@@ -248,8 +248,8 @@ def mbot_tools() -> list[Tool]:
                 "fwd|back|left|right <speed% 0-100> <seconds 0.1-5>; "
                 "straight <cm -30..30> [speed% 5-100]; turn <deg -180..180, + = left> "
                 "[speed% 5-100]; wait <seconds 0-5>; "
-                "led <r> <g> <b> [all|1-5]; arm up|down|home|<40-120>; "
-                "grip open|close|home|<45-120>; home. "
+                "led <r> <g> <b> [all|1-5]; arm up|down|home|<45-115>; "
+                "grip open|close|home|<50-115>; home. "
                 f"At most {MBOT_MAX_PROG_STEPS} steps and {MBOT_MAX_PROG_S:g} s in total "
                 "(moves + waits + step/turn time, plus about 1 s per arm/grip/home step); a longer "
                 "program is rejected as a whole. mbot_stop aborts it. " + LIMITS_TEXT

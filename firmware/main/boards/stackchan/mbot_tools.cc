@@ -31,6 +31,7 @@
 #include "application.h"
 #include "mbot_limits.h"
 #include "mbot_link.h"
+#include "mbot_teleop.h"
 #include "mcp_server.h"
 
 namespace {
@@ -207,7 +208,9 @@ std::function<void()> g_keep_awake;
 void HostAliveTick(void*) {
     // Runs in the esp_timer task; the gateway state is read on the main task.
     Application::GetInstance().Schedule([]() {
-        if (!Application::GetInstance().GetConnectedGatewayUrl().empty()) {
+        const bool gateway_up = !Application::GetInstance().GetConnectedGatewayUrl().empty();
+        MbotTeleopSetGatewayUp(gateway_up);
+        if (gateway_up) {
             MbotLink::GetInstance().NoteHostAlive();
         }
         if (g_keep_awake && MbotLink::GetInstance().IsConnected()) {
@@ -578,6 +581,7 @@ void RegisterMbotTools(McpServer& mcp_server, MbotBoardHooks hooks) {
 
     ESP_LOGI(TAG, "self.mbot.* tools registered; BLE link starts after activation");
     link.Start();
+    StartMbotTeleop();   // waits for Wi-Fi by itself
 }
 
 #endif  // CONFIG_STACKCHAN_MBOT_LINK

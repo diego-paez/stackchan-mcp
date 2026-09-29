@@ -1193,6 +1193,30 @@ config STACKCHAN_MBOT_LINK
         Optionally pin one robot by writing its address ("AA:BB:CC:DD:EE:FF")
         to NVS namespace "mbot", key "mac".
 
+config STACKCHAN_MBOT_TELEOP
+    bool "Direct Wi-Fi joystick teleop for the mBot (UDP)"
+    default y
+    depends on STACKCHAN_MBOT_LINK
+    help
+        Listen for Stacky teleop v1 UDP packets from a Wi-Fi joystick
+        (M5StickC Plus + JoyC firmware in mblock-stacky-bridge/remote/joyc)
+        and drive the mBot with the v1.2 `drive` lease command. Works with
+        the Mac off. The wheels stop 300 ms after the packets stop.
+        Spec: mblock-stacky-bridge/docs/teleop.md.
+
+config STACKCHAN_MBOT_TELEOP_PORT
+    int "Teleop UDP port"
+    default 8790
+    depends on STACKCHAN_MBOT_TELEOP
+
+config STACKCHAN_MBOT_TELEOP_KEY
+    hex "Teleop pairing key (must match the joystick)"
+    default 0x53544b31
+    depends on STACKCHAN_MBOT_TELEOP
+    help
+        A shared number that stops other devices on the network from
+        driving the robot by accident. It is not encryption.
+
 config STACKCHAN_MBOT_REFLEXES
     bool "Local avatar reflexes for mBot events"
     default y

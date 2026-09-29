@@ -22,18 +22,18 @@ constexpr double MBOT_MAX_PROG_S = 30.0;
 constexpr int MBOT_MAX_PROG_STEPS = 20;
 
 // Arm servo on port S4: 40 = lowest, 120 = highest.
-constexpr int MBOT_ARM_MIN = 40;
-constexpr int MBOT_ARM_MAX = 120;
+constexpr int MBOT_ARM_MIN = 45;
+constexpr int MBOT_ARM_MAX = 115;
 constexpr int MBOT_ARM_HOME = 90;
 // Gripper servo on port S3: 45 = closed, 120 = open.
-constexpr int MBOT_GRIP_MIN = 45;
-constexpr int MBOT_GRIP_MAX = 120;
+constexpr int MBOT_GRIP_MIN = 50;
+constexpr int MBOT_GRIP_MAX = 115;
 constexpr int MBOT_GRIP_HOME = 90;
 #define MBOT_ARM_PORT "S4"
 #define MBOT_GRIP_PORT "S3"
 
 // Servos glide (3 degree steps every 33 ms); they never jump.
-constexpr int MBOT_SERVO_DEG_PER_S = 90;
+constexpr int MBOT_SERVO_DEG_PER_S = 40;
 // Forward motion auto-stops below this distance (mBot side, ultrasonic).
 constexpr int MBOT_OBSTACLE_CM = 10;
 // While anything moves, the mBot stops if no sk_hb / sk arrives for this long.
@@ -44,6 +44,9 @@ constexpr double MBOT_HB_PERIOD_S = 1.0;
 // v1.1: longest single closed-loop `straight`, largest single `turn`.
 constexpr int MBOT_MAX_STEP_CM = 30;
 constexpr int MBOT_MAX_TURN_DEG = 180;
+// v1.2 teleop `drive`: stops unless renewed within the lease; turn rate cap.
+constexpr int MBOT_MAX_DRIVE_LEASE_MS = 500;
+constexpr int MBOT_MAX_DRIVE_DEG_S = 90;
 
 // --- Protocol constants from the "Delivery rules" section (not limits) ---
 

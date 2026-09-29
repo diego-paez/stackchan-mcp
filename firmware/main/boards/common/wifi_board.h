@@ -10,6 +10,7 @@ class WifiBoard : public Board {
 protected:
     esp_timer_handle_t connect_timer_ = nullptr;
     bool in_config_mode_ = false;
+    bool saved_ap_seen_ = false;   // a saved network answered a scan during this attempt
     NetworkEventCallback network_event_callback_ = nullptr;
 
     virtual std::string GetBoardJson() override;

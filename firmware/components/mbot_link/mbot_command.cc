@@ -137,6 +137,44 @@ CommandCheck CheckStep(const std::vector<std::string>& tokens, bool in_program) 
         return r;
     }
 
+    if (c == "drive") {
+        // v1.2 teleop, ROS cmd_vel shape: drive <v_cm_s> <w_deg_s> [lease_ms]
+        if (in_program) {
+            r.error = "step_not_allowed:drive";
+            return r;
+        }
+        if (nargs < 2 || nargs > 3) {
+            r.error = "bad_args:drive";
+            return r;
+        }
+        double v = 0, w = 0, lease = MBOT_MAX_DRIVE_LEASE_MS;
+        if (!ParseNumber(tokens[1], &v)) {
+            r.error = "bad_speed:" + tokens[1];
+            return r;
+        }
+        if (!ParseNumber(tokens[2], &w)) {
+            r.error = "bad_turn_rate:" + tokens[2];
+            return r;
+        }
+        if (nargs == 3 && !ParseNumber(tokens[3], &lease)) {
+            r.error = "bad_lease:" + tokens[3];
+            return r;
+        }
+        const double vmax = MBOT_MAX_RPM * 6.0 * MBOT_WHEEL_CM_PER_DEG;  // cm/s at MAX_RPM
+        const double v_c = std::round(Clamp(v, -vmax, vmax) * 10.0) / 10.0;
+        const double w_c = std::round(Clamp(w, -MBOT_MAX_DRIVE_DEG_S, MBOT_MAX_DRIVE_DEG_S));
+        const double lease_c = std::round(Clamp(lease, 50, MBOT_MAX_DRIVE_LEASE_MS));
+        NoteClamp(&r.clamped, "drive cm/s", v, v_c);
+        NoteClamp(&r.clamped, "drive deg/s", w, w_c);
+        NoteClamp(&r.clamped, "drive lease_ms", lease, lease_c);
+        r.normalized = "drive " + FormatSeconds(v_c) + " " + std::to_string(static_cast<int>(w_c)) + " " +
+                       std::to_string(static_cast<int>(lease_c));
+        r.seconds = lease_c / 1000.0;
+        r.is_motion = true;
+        r.ok = true;
+        return r;
+    }
+
     if (c == "wait") {
         if (!in_program) {
             r.error = "wait_only_in_prog";

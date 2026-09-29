@@ -194,6 +194,7 @@ add_executable(mbot_link_test
     test_mbot_link.cc
     ../components/mbot_link/f3_codec.cc
     ../components/mbot_link/mbot_command.cc
+    ../components/mbot_link/teleop_packet.cc
 )
 target_include_directories(mbot_link_test PRIVATE ../components/mbot_link)
 target_link_libraries(mbot_link_test PRIVATE host_cjson GTest::gtest_main)

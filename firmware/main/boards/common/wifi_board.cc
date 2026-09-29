@@ -57,6 +57,9 @@ void WifiBoard::StartNetwork() {
     WifiManagerConfig config;
     config.ssid_prefix = "Xiaozhi";
     config.language = Lang::CODE;
+    // Retry at least every 15 s. The default backoff grew to 5 minutes, so after a
+    // router refused a few logins the board almost stopped trying.
+    config.station_scan_max_interval_seconds = 15;
     wifi_manager.Initialize(config);
 
     // Set unified event callback - forward to NetworkEvent with SSID data
@@ -94,6 +97,7 @@ void WifiBoard::TryWifiConnect() {
     if (have_ssid) {
         // Start connection attempt with timeout
         ESP_LOGI(TAG, "Starting WiFi connection attempt");
+        saved_ap_seen_ = false;
         esp_timer_start_once(connect_timer_, CONNECT_TIMEOUT_SEC * 1000000ULL);
         WifiManager::GetInstance().StartStation();
     } else {
@@ -120,6 +124,7 @@ void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {
             ESP_LOGI(TAG, "WiFi scanning");
             break;
         case NetworkEvent::Connecting:
+            saved_ap_seen_ = true;
             ESP_LOGI(TAG, "WiFi connecting to %s", data.c_str());
             break;
         case NetworkEvent::Disconnected:
@@ -151,6 +156,15 @@ void WifiBoard::SetNetworkEventCallback(NetworkEventCallback callback) {
 
 void WifiBoard::OnWifiConnectTimeout(void* arg) {
     auto* board = static_cast<WifiBoard*>(arg);
+    if (board->saved_ap_seen_) {
+        // The saved network is in range but refused or ignored our logins (seen
+        // for minutes after quick reboots). The setup hotspot cannot fix that and
+        // stops all retries, so keep trying instead.
+        ESP_LOGW(TAG, "WiFi connection timeout, saved network is in range: keep retrying");
+        board->saved_ap_seen_ = false;
+        esp_timer_start_once(board->connect_timer_, CONNECT_TIMEOUT_SEC * 1000000ULL);
+        return;
+    }
     ESP_LOGW(TAG, "WiFi connection timeout, entering config mode");
 
     WifiManager::GetInstance().StopStation();

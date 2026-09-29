@@ -13,6 +13,7 @@
 #include "f3_codec.h"
 #include "mbot_command.h"
 #include "mbot_limits.h"
+#include "teleop_packet.h"
 
 namespace {
 
@@ -129,13 +130,13 @@ TEST(MbotLimits, MatchProtocolTable) {
     EXPECT_DOUBLE_EQ(MBOT_MAX_MOVE_S, 5.0);
     EXPECT_DOUBLE_EQ(MBOT_MAX_PROG_S, 30.0);
     EXPECT_EQ(MBOT_MAX_PROG_STEPS, 20);
-    EXPECT_EQ(MBOT_ARM_MIN, 40);
-    EXPECT_EQ(MBOT_ARM_MAX, 120);
+    EXPECT_EQ(MBOT_ARM_MIN, 45);   // 5 deg inside the hardware range 40-120
+    EXPECT_EQ(MBOT_ARM_MAX, 115);
     EXPECT_EQ(MBOT_ARM_HOME, 90);
-    EXPECT_EQ(MBOT_GRIP_MIN, 45);
-    EXPECT_EQ(MBOT_GRIP_MAX, 120);
+    EXPECT_EQ(MBOT_GRIP_MIN, 50);  // 5 deg inside the hardware range 45-120
+    EXPECT_EQ(MBOT_GRIP_MAX, 115);
     EXPECT_EQ(MBOT_GRIP_HOME, 90);
-    EXPECT_EQ(MBOT_SERVO_DEG_PER_S, 90);
+    EXPECT_EQ(MBOT_SERVO_DEG_PER_S, 40);
     EXPECT_EQ(MBOT_OBSTACLE_CM, 10);
     EXPECT_DOUBLE_EQ(MBOT_WATCHDOG_S, 3.0);
     EXPECT_DOUBLE_EQ(MBOT_HB_PERIOD_S, 1.0);
@@ -185,11 +186,11 @@ TEST(MbotCommand, RejectsUnknownCommands) {
 
 TEST(MbotCommand, ServoPresetsAndAnglesAreClamped) {
     EXPECT_EQ(mbot::CheckCommand("arm up").normalized, "arm up");
-    EXPECT_EQ(mbot::CheckCommand("arm 10").normalized, "arm 40");
-    EXPECT_EQ(mbot::CheckCommand("arm 200").normalized, "arm 120");
+    EXPECT_EQ(mbot::CheckCommand("arm 10").normalized, "arm 45");
+    EXPECT_EQ(mbot::CheckCommand("arm 200").normalized, "arm 115");
     EXPECT_EQ(mbot::CheckCommand("grip close").normalized, "grip close");
-    EXPECT_EQ(mbot::CheckCommand("grip 0").normalized, "grip 45");
-    EXPECT_EQ(mbot::CheckCommand("grip 999").normalized, "grip 120");
+    EXPECT_EQ(mbot::CheckCommand("grip 0").normalized, "grip 50");
+    EXPECT_EQ(mbot::CheckCommand("grip 999").normalized, "grip 115");
     EXPECT_FALSE(mbot::CheckCommand("arm open").ok);
     EXPECT_FALSE(mbot::CheckCommand("grip up").ok);
     EXPECT_FALSE(mbot::CheckCommand("arm").ok);
@@ -371,4 +372,99 @@ TEST(MbotEventsV11, ParseOdom) {
     ASSERT_TRUE(mbot::ParseOdomArgs("t=5 l=none r=none yaw=none", &o));
     EXPECT_FALSE(o.left_cm.has_value());
     EXPECT_FALSE(o.yaw_deg.has_value());
+}
+
+
+// ---- v1.2 drive validation ----
+TEST(MbotCommand, DriveNormalizedAndClamped) {
+    auto r = mbot::CheckCommand("drive 10 45 300");
+    ASSERT_TRUE(r.ok) << r.error;
+    EXPECT_EQ(r.normalized, "drive 10 45 300");
+    EXPECT_TRUE(r.is_motion);
+    EXPECT_TRUE(r.clamped.empty());
+
+    r = mbot::CheckCommand("drive 999 -999 99999");
+    ASSERT_TRUE(r.ok) << r.error;
+    // 60 rpm * 6 deg/s * 6.5*pi/360 cm/deg = 20.4 cm/s
+    EXPECT_EQ(r.normalized, "drive 20.4 -" + std::to_string(MBOT_MAX_DRIVE_DEG_S) + " " +
+                                std::to_string(MBOT_MAX_DRIVE_LEASE_MS));
+    EXPECT_FALSE(r.clamped.empty());
+    EXPECT_DOUBLE_EQ(r.seconds, MBOT_MAX_DRIVE_LEASE_MS / 1000.0);
+
+    EXPECT_EQ(mbot::CheckCommand("drive 5 0").normalized, "drive 5 0 " + std::to_string(MBOT_MAX_DRIVE_LEASE_MS));
+}
+
+TEST(MbotCommand, DriveRejectsBadInputAndPrograms) {
+    EXPECT_FALSE(mbot::CheckCommand("drive").ok);
+    EXPECT_FALSE(mbot::CheckCommand("drive 10").ok);
+    EXPECT_FALSE(mbot::CheckCommand("drive fast 0").ok);
+    EXPECT_FALSE(mbot::CheckCommand("drive 10 0 300 9").ok);
+    auto r = mbot::CheckCommand("prog led 0 0 9; drive 10 0 300");
+    EXPECT_FALSE(r.ok);
+    EXPECT_NE(r.error.find("drive"), std::string::npos);
+}
+
+// ---- teleop packets ----
+// Golden vector, shared with docs/teleop.md, scripts/teleop_udp.py and the JoyC firmware:
+// seq 7, key 0x12345678, 150 mm/s, -500 mrad/s, buttons enable|arm_up, lease 300 ms.
+const char* kGoldenCmdVel = "5354010107000000785634129600" "0cfe05002c01";
+
+TEST(Teleop, CmdVelMatchesGoldenVector) {
+    teleop::CmdVel v;
+    v.linear_x_mm_s = 150;
+    v.angular_z_mrad_s = -500;
+    v.buttons = teleop::kEnable | teleop::kArmUp;
+    v.lease_ms = 300;
+    uint8_t buf[32];
+    size_t n = teleop::EncodeCmdVel(7, 0x12345678, v, buf, sizeof(buf));
+    ASSERT_EQ(n, teleop::kCmdVelSize);
+    EXPECT_EQ(std::vector<uint8_t>(buf, buf + n), FromHex(kGoldenCmdVel));
+
+    teleop::Header h;
+    teleop::CmdVel back;
+    ASSERT_TRUE(teleop::ParseCmdVel(buf, n, &h, &back));
+    EXPECT_EQ(h.seq, 7u);
+    EXPECT_EQ(h.key, 0x12345678u);
+    EXPECT_EQ(back.linear_x_mm_s, 150);
+    EXPECT_EQ(back.angular_z_mrad_s, -500);
+    EXPECT_EQ(back.buttons, teleop::kEnable | teleop::kArmUp);
+    EXPECT_EQ(back.lease_ms, 300);
+    EXPECT_DOUBLE_EQ(teleop::LinearCmPerS(back), 15.0);
+    EXPECT_NEAR(teleop::AngularDegPerS(back), -28.648, 0.001);
+}
+
+TEST(Teleop, StatusRoundTripAndRejects) {
+    teleop::Status s;
+    s.flags = teleop::kMbotConnected | teleop::kTeleopActive;
+    s.battery_pct = 80;
+    s.dist_cm = 123;
+    s.arm_deg = 100;
+    s.grip_deg = 45;
+    s.rtt_ms = 60;
+    uint8_t buf[32];
+    size_t n = teleop::EncodeStatus(teleop::kStatus, 9, 1, s, buf, sizeof(buf));
+    ASSERT_EQ(n, teleop::kStatusSize);
+    teleop::Header h;
+    teleop::Status b;
+    ASSERT_TRUE(teleop::ParseStatus(buf, n, &h, &b));
+    EXPECT_EQ(b.flags, s.flags);
+    EXPECT_EQ(b.battery_pct, 80);
+    EXPECT_EQ(b.dist_cm, 123);
+    EXPECT_EQ(b.arm_deg, 100);
+    EXPECT_EQ(b.grip_deg, 45);
+    EXPECT_EQ(b.rtt_ms, 60);
+
+    teleop::CmdVel v;
+    EXPECT_FALSE(teleop::ParseCmdVel(buf, n, &h, &v));          // wrong type
+    EXPECT_FALSE(teleop::ParseStatus(buf, n - 1, &h, &b));      // short
+    buf[0] = 'X';
+    EXPECT_FALSE(teleop::ParseHeader(buf, n, &h));              // bad magic
+    EXPECT_EQ(teleop::EncodeCmdVel(1, 1, v, buf, 19), 0u);      // too small
+}
+
+TEST(Teleop, SequenceSurvivesWrap) {
+    EXPECT_TRUE(teleop::SeqNewer(2, 1));
+    EXPECT_FALSE(teleop::SeqNewer(1, 1));
+    EXPECT_FALSE(teleop::SeqNewer(1, 2));
+    EXPECT_TRUE(teleop::SeqNewer(3, 0xFFFFFFFEu));
 }
